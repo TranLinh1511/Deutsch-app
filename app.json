@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "bei TL",
+    "slug": "bei-tl",
+    "scheme": "beitl",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.deutschbeitl.app",
+      "infoPlist": {
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "android": {
+      "package": "com.deutschbeitl.app",
+      "googleServicesFile": "./google-services.json"
+    },
+    "plugins": [
+      "expo-notifications",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Cho phép bei TL sử dụng micro để luyện phát âm.",
+          "speechRecognitionPermission": "Cho phép bei TL nhận diện giọng nói để chấm phát âm."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "buildToolsVersion": "35.0.0"
+          }
+        }
+      ]
+    ]
+  }
+}

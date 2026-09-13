@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "698311590550",
+    "project_id": "deutschbei-tl",
+    "storage_bucket": "deutschbei-tl.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:698311590550:android:3145785c832309461138b7",
+        "android_client_info": {
+          "package_name": "com.deutschbeitl.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBCBPBvwbB4yl1n4ork11MOFqJR-KETZEQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

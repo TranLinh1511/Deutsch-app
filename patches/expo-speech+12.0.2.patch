@@ -1,0 +1,44 @@
+diff --git a/node_modules/expo-speech/ios/SpeechModule.swift b/node_modules/expo-speech/ios/SpeechModule.swift
+index e3086e3..d873f73 100644
+--- a/node_modules/expo-speech/ios/SpeechModule.swift
++++ b/node_modules/expo-speech/ios/SpeechModule.swift
+@@ -1,4 +1,5 @@
+ import ExpoModulesCore
++import AVFoundation
+ 
+ let SPEAKING_STARTED = "Exponent.speakingStarted"
+ let SPEAKING_WILL_SAY_NEXT_STRING = "Exponent.speakingWillSayNextString"
+@@ -16,6 +17,33 @@ public final class SpeechModule: Module, SpeechResultHadler {
+     OnCreate {
+       delegate = SpeechDelegate(resultHandler: self)
+       synthesizer.delegate = delegate
++
++      // PATCH (bei TL): fix "AVSpeechSynthesizer speak() 5 second delay"
++      // (a well-known, long-standing AVFoundation issue — see e.g.
++      // https://stackoverflow.com/questions/44489329 and Apple Developer
++      // Forums threads 715339 / 731238). Upstream expo-speech never
++      // explicitly configures/activates AVAudioSession before calling
++      // speak(); on some devices/iOS versions this means EVERY speak()
++      // call has to implicitly negotiate + activate an audio session
++      // itself before it can produce sound, which is especially costly for
++      // languages whose on-device pronunciation-rule data is large (German
++      // is reported ~5-9x larger than English/Italian), showing up as a
++      // multi-second delay on literally every call, not just the first.
++      //
++      // Explicitly setting the category ONCE, up front, and telling the
++      // synthesizer to use that (already-active) session instead of
++      // negotiating its own each time, is the standard community fix for
++      // this exact symptom. `.mixWithOthers` keeps this compatible with
++      // this app's other audio (react-native-track-player's keep-alive
++      // track during "Nghe từ vựng").
++      synthesizer.usesApplicationAudioSession = true
++      do {
++        try AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
++        try AVAudioSession.sharedInstance().setActive(true)
++      } catch {
++        // Không nghiêm trọng — nếu lỗi, speak() vẫn hoạt động như trước
++        // (có thể vẫn chậm), chỉ là không có được lợi ích của patch này.
++      }
+     }
+ 
+     Events([
