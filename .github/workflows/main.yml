@@ -1,0 +1,108 @@
+name: Build IPA for TrollStore (no Apple Developer account)
+
+# Cách dùng:
+# 1. Đưa toàn bộ nội dung thư mục "bei-tl-rn - Copy" lên 1 GitHub repo (ở gốc repo, không để trong subfolder).
+# 2. Copy file này vào .github/workflows/build-ipa-trollstore.yml trong repo đó.
+# 3. Push code lên GitHub -> vào tab Actions -> chạy workflow "Build IPA for TrollStore".
+# 4. Sau khi chạy xong, vào Actions -> chọn run -> mục Artifacts -> tải file "app-ipa" về.
+# 5. Chuyển file .ipa vào iPhone (AirDrop / Files / cáp) -> mở bằng TrollStore để cài.
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+jobs:
+  build-ipa:
+    runs-on: macos-14
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install JS dependencies
+        run: npm install
+
+      - name: Expo prebuild (generate native ios project)
+        run: npx expo prebuild -p ios --clean
+
+      - name: Install CocoaPods dependencies
+        run: |
+          cd ios
+          pod install --repo-update
+
+      - name: Build .app (no code signing)
+        run: |
+          cd ios
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          echo "Using workspace=$WORKSPACE"
+          xcodebuild -workspace "$WORKSPACE" -list
+          SCHEME=$(xcodebuild -workspace "$WORKSPACE" -list | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag' | sed -e 's/^[ \t]*//' | head -n 1)
+          echo "Using scheme=$SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Install ldid (fakesign tool)
+        run: brew install ldid
+
+      - name: Package + fakesign IPA
+        run: |
+          cd ios
+          APP_PATH=$(find build/Build/Products -maxdepth 2 -name "*.app" | head -n 1)
+          echo "Found app: $APP_PATH"
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          APP_NAME=$(basename "$APP_PATH" .app)
+
+          # SỬA LỖI "phát âm tiếng Đức chậm ~5 giây" TRÊN BẢN CÀI QUA
+          # TROLLSTORE: đã xác nhận (Settings > Accessibility > Spoken
+          # Content đọc tiếng Đức trên CÙNG máy vẫn nhanh bình thường) đây
+          # KHÔNG phải lỗi phần cứng/hệ điều hành chung, mà do app ký giả
+          # bằng ldid (không có entitlements hợp lệ) chạy trong một "app
+          # sandbox" không đầy đủ — Apple Developer Forums có ghi nhận
+          # chính AVSpeechSynthesizer (giọng đọc chất lượng cao) hoạt động
+          # sai/chậm khi App Sandbox bật ở cấu hình thiếu quyền, và hoạt
+          # động bình thường khi tắt hẳn sandbox.
+          #
+          # TrollStore hỗ trợ sẵn việc "tháo sandbox" cho app bằng cách gắn
+          # các entitlements đặc biệt này vào lúc ký — đây là kỹ thuật cộng
+          # đồng TrollStore dùng phổ biến (không phải hàng riêng của app
+          # này), TrollStore sẽ giữ nguyên các entitlements này khi ký lại.
+          #
+          # LƯU Ý ĐÁNH ĐỔI: tháo sandbox nghĩa là app được cấp quyền truy
+          # cập hệ thống rộng hơn nhiều so với app thường (gần như ngang
+          # một app hệ thống) — chấp nhận được với app tự dùng cá nhân qua
+          # TrollStore, nhưng cần biết trước.
+          echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict></dict></plist>' > entitlements.plist
+          /usr/libexec/PlistBuddy -c "Add :com.apple.private.security.no-sandbox bool true" entitlements.plist
+          /usr/libexec/PlistBuddy -c "Add :platform-application bool true" entitlements.plist
+          /usr/libexec/PlistBuddy -c "Add :com.apple.private.security.storage.AppDataContainers bool true" entitlements.plist
+          echo "entitlements.plist content:"
+          cat entitlements.plist
+
+          # Fakesign the main binary WITH the entitlements above; embedded
+          # frameworks chỉ cần ký lại bình thường (không cần entitlements
+          # đặc biệt).
+          find "Payload/$APP_NAME.app" -type f \( -perm -u+x \) -not -name "$APP_NAME" -exec ldid -S {} \; 2>/dev/null || true
+          ldid -Sentitlements.plist "Payload/$APP_NAME.app/$APP_NAME"
+          zip -r -y "$APP_NAME.ipa" Payload
+          mkdir -p ../out
+          mv "$APP_NAME.ipa" ../out/
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-ipa
+          path: out/*.ipa
