@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useMemo, useState } from
 import type { VocabWord } from '@/types/models';
 import { useListenMode } from '@/hooks/useListenMode';
 import { classifyWordType } from '@/utils/grading';
+import { useDataStore } from '@/store/DataStore';
 
 /**
  * Bọc useListenMode() một lần DUY NHẤT ở gốc app (App.tsx → AppShell), thay
@@ -75,6 +76,19 @@ interface ListenModeContextValue extends ReturnType<typeof useListenMode> {
    * lại gần nhau) thay vì giữ đúng thứ tự gốc trong phiên. */
   sortByWordType: boolean;
   setSortByWordType: (v: boolean) => void;
+
+  /** Các nhóm TRẠNG THÁI từ có mặt trong danh sách gốc, kèm số lượng —
+   * ("Chưa thuộc" / "Đã thuộc" / "Chú ý"). Khác "loại từ" (n/v/khác — mỗi
+   * từ chỉ thuộc ĐÚNG 1 nhóm), 3 nhóm trạng thái này KHÔNG loại trừ nhau
+   * (1 từ có thể vừa "Đã thuộc" vừa "Chú ý" cùng lúc) — lọc theo kiểu HOẶC
+   * (OR): 1 từ được nghe nếu nó khớp BẤT KỲ nhóm trạng thái nào đang được
+   * tick, không cần khớp hết. */
+  statusGroups: { key: string; label: string; count: number }[];
+  /** null = đang chọn TẤT CẢ trạng thái (không lọc gì). */
+  statusFilter: string[] | null;
+  setStatusFilterDirect: (v: string[] | null) => void;
+  toggleStatus: (key: string) => void;
+  selectAllStatuses: () => void;
 }
 
 const ListenModeContext = createContext<ListenModeContextValue | null>(null);
@@ -85,6 +99,14 @@ const WORD_TYPE_GROUP_LABELS: Record<'n' | 'v' | 'other', string> = {
   n: 'Danh từ',
   v: 'Động từ',
   other: 'Khác',
+};
+
+/** Nhãn hiển thị cố định cho 3 nhóm TRẠNG THÁI từ — khớp đúng chữ đang
+ * dùng ở nơi khác trong app (WordItemCard, SelectWordsModal) để nhất quán. */
+const STATUS_GROUP_LABELS: Record<'active' | 'mastered' | 'flagged', string> = {
+  active: 'Chưa thuộc',
+  mastered: 'Đã thuộc',
+  flagged: 'Chú ý',
 };
 
 function normalizeWordTypeKey(wordType: string | undefined): string {
@@ -116,6 +138,12 @@ export function ListenModeProvider({ children }: { children: React.ReactNode }) 
   const [minimized, setMinimized] = useState(false);
   const [wordTypeFilter, setWordTypeFilter] = useState<string[] | null>(null);
   const [sortByWordType, setSortByWordType] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<string[] | null>(null);
+  // masteredIds/flaggedIds không nằm trên chính VocabWord (openWithWords
+  // nhận vào danh sách "thô" từ vocab của phiên) — cần lấy riêng từ
+  // DataStore (đã bọc ListenModeProvider ở App.tsx) để biết từ nào đang
+  // "Đã thuộc"/"Chú ý" mà xây bộ lọc trạng thái.
+  const { masteredIds, flaggedIds } = useDataStore();
 
   const wordTypeGroups = useMemo(() => {
     const counts: Record<'n' | 'v' | 'other', number> = { n: 0, v: 0, other: 0 };
@@ -127,11 +155,34 @@ export function ListenModeProvider({ children }: { children: React.ReactNode }) 
       .map((key) => ({ key, label: WORD_TYPE_GROUP_LABELS[key], count: counts[key] }));
   }, [rawWords]);
 
+  const statusGroups = useMemo(() => {
+    const counts: Record<'active' | 'mastered' | 'flagged', number> = { active: 0, mastered: 0, flagged: 0 };
+    for (const w of rawWords) {
+      if (masteredIds.has(w.id)) counts.mastered++;
+      else counts.active++;
+      if (flaggedIds.has(w.id)) counts.flagged++;
+    }
+    return (['active', 'mastered', 'flagged'] as const)
+      .filter((key) => counts[key] > 0)
+      .map((key) => ({ key, label: STATUS_GROUP_LABELS[key], count: counts[key] }));
+  }, [rawWords, masteredIds, flaggedIds]);
+
   const effectiveWords = useMemo(() => {
     let list = rawWords;
     if (wordTypeFilter !== null) {
       const selected = new Set(wordTypeFilter);
       list = list.filter((w) => selected.has(normalizeWordTypeKey(w.wordType)));
+    }
+    if (statusFilter !== null) {
+      // Lọc kiểu HOẶC (OR): giữ từ nếu nó khớp BẤT KỲ trạng thái nào đang
+      // được tick — vd. tick "Chưa thuộc" + "Chú ý" thì nghe cả từ chưa
+      // thuộc LẪN từ đã thuộc nhưng có đánh dấu chú ý (xem giải thích ở
+      // khai báo statusGroups trong interface phía trên).
+      const selected = new Set(statusFilter);
+      list = list.filter((w) => {
+        const mastered = masteredIds.has(w.id);
+        return (selected.has('active') && !mastered) || (selected.has('mastered') && mastered) || (selected.has('flagged') && flaggedIds.has(w.id));
+      });
     }
     if (sortByWordType) {
       // Sắp xếp ỔN ĐỊNH (stable) theo thứ tự nhóm wordTypeGroups (nhiều từ
@@ -145,7 +196,7 @@ export function ListenModeProvider({ children }: { children: React.ReactNode }) 
       });
     }
     return list;
-  }, [rawWords, wordTypeFilter, sortByWordType, wordTypeGroups]);
+  }, [rawWords, wordTypeFilter, statusFilter, sortByWordType, wordTypeGroups, masteredIds, flaggedIds]);
 
   const listen = useListenMode(effectiveWords, sessionLabel);
 
@@ -166,6 +217,15 @@ export function ListenModeProvider({ children }: { children: React.ReactNode }) 
     [wordTypeGroups]
   );
 
+  const selectAllStatuses = useCallback(() => setStatusFilter(null), []);
+
+  const toggleStatus = useCallback(
+    (key: string) => {
+      setStatusFilter((prev) => toggleWordTypeFilterKey(prev, key, statusGroups));
+    },
+    [statusGroups]
+  );
+
   const openWithWords = useCallback((next: VocabWord[], label?: string) => {
     setRawWords(next);
     setSessionLabel(label);
@@ -176,6 +236,7 @@ export function ListenModeProvider({ children }: { children: React.ReactNode }) 
     // sạch danh sách của phiên MỚI vừa mở khiến người dùng tưởng hết từ.
     setWordTypeFilter(null);
     setSortByWordType(false);
+    setStatusFilter(null);
   }, []);
 
   const expand = useCallback(() => {
@@ -213,6 +274,11 @@ export function ListenModeProvider({ children }: { children: React.ReactNode }) 
         isWordTypeSelected,
         sortByWordType,
         setSortByWordType,
+        statusGroups,
+        statusFilter,
+        setStatusFilterDirect: setStatusFilter,
+        toggleStatus,
+        selectAllStatuses,
       }}
     >
       {children}

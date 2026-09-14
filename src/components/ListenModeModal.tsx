@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, Text, Pressable, StyleSheet, Modal, ScrollView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/theme/ThemeContext';
@@ -64,6 +64,7 @@ interface SettingsDraft {
   sleepMinutes: number;
   wordTypeFilter: string[] | null;
   sortByWordType: boolean;
+  statusFilter: string[] | null;
 }
 
 export default function ListenModeModal() {
@@ -73,10 +74,11 @@ export default function ListenModeModal() {
   // Toàn bộ cài đặt (tốc độ, đọc phần nào, loại từ, lặp lại, chia nhóm,
   // hẹn giờ) giờ gom chung vào 1 popup DUY NHẤT, mở bằng nút bánh răng.
   const [settingsPopupVisible, setSettingsPopupVisible] = useState(false);
-  // Bộ lọc "Loại từ" kiểu Excel mở như 1 popup con, chồng lên trên popup
-  // cài đặt chính (bấm ra ngoài đóng riêng popup con, không đóng luôn popup
-  // cha).
+  // 2 bộ lọc kiểu Excel (Loại từ / Trạng thái) mở như popup con, chồng lên
+  // trên popup cài đặt chính (bấm ra ngoài chỉ đóng riêng popup con, không
+  // đóng luôn popup cha).
   const [wordTypeFilterVisible, setWordTypeFilterVisible] = useState(false);
+  const [statusFilterVisible, setStatusFilterVisible] = useState(false);
   // Bản NHÁP của mọi cài đặt trong popup — xem giải thích ở docstring trên.
   const [draft, setDraft] = useState<SettingsDraft>({
     rate: listen.rate,
@@ -87,12 +89,13 @@ export default function ListenModeModal() {
     sleepMinutes: listen.sleepMinutes,
     wordTypeFilter: listen.wordTypeFilter,
     sortByWordType: listen.sortByWordType,
+    statusFilter: listen.statusFilter,
   });
 
   const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
   // Nạp lại bản nháp từ giá trị THẬT mỗi lần mở popup, rồi mới mở.
-  const openSettings = () => {
+  const openSettings = useCallback(() => {
     setDraft({
       rate: listen.rate,
       nextWordDelayMs: listen.nextWordDelayMs,
@@ -102,9 +105,20 @@ export default function ListenModeModal() {
       sleepMinutes: listen.sleepMinutes,
       wordTypeFilter: listen.wordTypeFilter,
       sortByWordType: listen.sortByWordType,
+      statusFilter: listen.statusFilter,
     });
     setSettingsPopupVisible(true);
-  };
+  }, [
+    listen.rate,
+    listen.nextWordDelayMs,
+    listen.repeatWordCount,
+    listen.repeatBatchCount,
+    listen.batchSize,
+    listen.sleepMinutes,
+    listen.wordTypeFilter,
+    listen.sortByWordType,
+    listen.statusFilter,
+  ]);
 
   // Chỉ khi bấm "Lưu cài đặt" mới thật sự ghi bản nháp vào ListenModeContext
   // (và qua đó persist AsyncStorage như logic cũ trong useListenMode.ts).
@@ -117,23 +131,50 @@ export default function ListenModeModal() {
     listen.setSleepTimerMinutes(draft.sleepMinutes);
     listen.setWordTypeFilterDirect(draft.wordTypeFilter);
     listen.setSortByWordType(draft.sortByWordType);
+    listen.setStatusFilterDirect(draft.statusFilter);
     setSettingsPopupVisible(false);
   };
 
-  const draftIncRate = () => setDraft((d) => ({ ...d, rate: Math.round(clamp(d.rate + RATE_STEP, RATE_MIN, RATE_MAX) * 100) / 100 }));
-  const draftDecRate = () => setDraft((d) => ({ ...d, rate: Math.round(clamp(d.rate - RATE_STEP, RATE_MIN, RATE_MAX) * 100) / 100 }));
-  const draftIncGap = () => setDraft((d) => ({ ...d, nextWordDelayMs: clamp(d.nextWordDelayMs + GAP_STEP, GAP_MIN, GAP_MAX) }));
-  const draftDecGap = () => setDraft((d) => ({ ...d, nextWordDelayMs: clamp(d.nextWordDelayMs - GAP_STEP, GAP_MIN, GAP_MAX) }));
-  const draftIncRepeatWord = () => setDraft((d) => ({ ...d, repeatWordCount: clamp(d.repeatWordCount + 1, REPEAT_MIN, REPEAT_MAX) }));
-  const draftDecRepeatWord = () => setDraft((d) => ({ ...d, repeatWordCount: clamp(d.repeatWordCount - 1, REPEAT_MIN, REPEAT_MAX) }));
-  const draftIncRepeatBatch = () => setDraft((d) => ({ ...d, repeatBatchCount: clamp(d.repeatBatchCount + 1, REPEAT_MIN, REPEAT_MAX) }));
-  const draftDecRepeatBatch = () => setDraft((d) => ({ ...d, repeatBatchCount: clamp(d.repeatBatchCount - 1, REPEAT_MIN, REPEAT_MAX) }));
-  const draftIncBatchSize = () => setDraft((d) => ({ ...d, batchSize: Math.max(BATCH_SIZE_MIN, d.batchSize + BATCH_SIZE_STEP) }));
-  const draftDecBatchSize = () => setDraft((d) => ({ ...d, batchSize: Math.max(BATCH_SIZE_MIN, d.batchSize - BATCH_SIZE_STEP) }));
-  const draftToggleWordType = (key: string) =>
-    setDraft((d) => ({ ...d, wordTypeFilter: toggleWordTypeFilterKey(d.wordTypeFilter, key, listen.wordTypeGroups) }));
-  const draftSelectAllWordTypes = () => setDraft((d) => ({ ...d, wordTypeFilter: null }));
-  const draftToggleSort = () => setDraft((d) => ({ ...d, sortByWordType: !d.sortByWordType }));
+  // SỬA LỖI LAG "rất lâu" khi tick chọn trong Lọc loại từ/Trạng thái: mỗi
+  // lần tick 1 checkbox trong 2 popup lọc (lồng bên trong "Cài đặt nghe",
+  // lồng bên trong "Nghe từ vựng" — 3 <Modal> native CÙNG đang hiển thị 1
+  // lúc) chỉ đổi 1 field nhỏ trong `draft`. Nhưng TRƯỚC ĐÂY các hàm xử lý
+  // (draftToggleWordType...) được khai báo lại MỚI mỗi lần component này
+  // render — khiến các popup con (WordTypeFilterDropdown, dù đã bọc
+  // React.memo) vẫn re-render vì props hàm luôn "khác tham chiếu". Tệ hơn:
+  // màn hình "Nghe từ vựng" chính (thẻ từ + cụm nút phát, KHÔNG hề phụ
+  // thuộc `draft`) trước đây nằm CHUNG 1 hàm render với popup cài đặt, nên
+  // cứ tick 1 checkbox là redraw LUÔN cả màn hình đó lẫn 2 Modal đang chồng
+  // lên nhau — đúng kiểu lag của bài "gõ chữ bị giật" đã sửa trước đó.
+  // Bọc useCallback ở đây (tham chiếu ổn định) + tách màn hình chính ra
+  // component ListenPlaybackScreen (React.memo, cuối file) giải quyết cả
+  // 2 vấn đề cùng lúc.
+  const draftIncRate = useCallback(() => setDraft((d) => ({ ...d, rate: Math.round(clamp(d.rate + RATE_STEP, RATE_MIN, RATE_MAX) * 100) / 100 })), []);
+  const draftDecRate = useCallback(() => setDraft((d) => ({ ...d, rate: Math.round(clamp(d.rate - RATE_STEP, RATE_MIN, RATE_MAX) * 100) / 100 })), []);
+  const draftIncGap = useCallback(() => setDraft((d) => ({ ...d, nextWordDelayMs: clamp(d.nextWordDelayMs + GAP_STEP, GAP_MIN, GAP_MAX) })), []);
+  const draftDecGap = useCallback(() => setDraft((d) => ({ ...d, nextWordDelayMs: clamp(d.nextWordDelayMs - GAP_STEP, GAP_MIN, GAP_MAX) })), []);
+  const draftIncRepeatWord = useCallback(() => setDraft((d) => ({ ...d, repeatWordCount: clamp(d.repeatWordCount + 1, REPEAT_MIN, REPEAT_MAX) })), []);
+  const draftDecRepeatWord = useCallback(() => setDraft((d) => ({ ...d, repeatWordCount: clamp(d.repeatWordCount - 1, REPEAT_MIN, REPEAT_MAX) })), []);
+  const draftIncRepeatBatch = useCallback(() => setDraft((d) => ({ ...d, repeatBatchCount: clamp(d.repeatBatchCount + 1, REPEAT_MIN, REPEAT_MAX) })), []);
+  const draftDecRepeatBatch = useCallback(() => setDraft((d) => ({ ...d, repeatBatchCount: clamp(d.repeatBatchCount - 1, REPEAT_MIN, REPEAT_MAX) })), []);
+  const draftIncBatchSize = useCallback(() => setDraft((d) => ({ ...d, batchSize: Math.max(BATCH_SIZE_MIN, d.batchSize + BATCH_SIZE_STEP) })), []);
+  const draftDecBatchSize = useCallback(() => setDraft((d) => ({ ...d, batchSize: Math.max(BATCH_SIZE_MIN, d.batchSize - BATCH_SIZE_STEP) })), []);
+  const draftToggleWordType = useCallback(
+    (key: string) => setDraft((d) => ({ ...d, wordTypeFilter: toggleWordTypeFilterKey(d.wordTypeFilter, key, listen.wordTypeGroups) })),
+    [listen.wordTypeGroups]
+  );
+  const draftSelectAllWordTypes = useCallback(() => setDraft((d) => ({ ...d, wordTypeFilter: null })), []);
+  const draftToggleSort = useCallback(() => setDraft((d) => ({ ...d, sortByWordType: !d.sortByWordType })), []);
+  const draftToggleStatus = useCallback(
+    (key: string) => setDraft((d) => ({ ...d, statusFilter: toggleWordTypeFilterKey(d.statusFilter, key, listen.statusGroups) })),
+    [listen.statusGroups]
+  );
+  const draftSelectAllStatuses = useCallback(() => setDraft((d) => ({ ...d, statusFilter: null })), []);
+  const closeWordTypeFilter = useCallback(() => setWordTypeFilterVisible(false), []);
+  const closeStatusFilter = useCallback(() => setStatusFilterVisible(false), []);
+  const openWordTypeFilter = useCallback(() => setWordTypeFilterVisible(true), []);
+  const openStatusFilter = useCallback(() => setStatusFilterVisible(true), []);
+  const closeSettingsPopup = useCallback(() => setSettingsPopupVisible(false), []);
 
   const word = listen.currentWord;
   const germanExample = word?.example ? getGermanExample(word.example) : '';
@@ -141,151 +182,38 @@ export default function ListenModeModal() {
 
   return (
     <Modal visible={listen.modalVisible} animationType="slide" onRequestClose={listen.minimize} presentationStyle="pageSheet">
-      <View style={[styles.screen, { backgroundColor: colors.bg, paddingTop: insets.top + 8, paddingBottom: insets.bottom + 12 }]}>
-        <View style={styles.headerRow}>
-          <Text style={[styles.title, { color: colors.tx }]}>
-            <Icon name="headphones-alt" size={16} color={colors.tx} />{'  '}Nghe từ vựng
-          </Text>
-          <View style={styles.headerBtns}>
-            <Pressable
-              onPress={listen.minimize}
-              hitSlop={8}
-              style={[styles.closeBtn, { backgroundColor: colors.bg3, borderColor: colors.border }]}
-            >
-              <Icon name="minus" size={14} color={colors.tx2} />
-            </Pressable>
-            <Pressable
-              onPress={listen.close}
-              hitSlop={8}
-              style={[styles.closeBtn, { backgroundColor: colors.bg3, borderColor: colors.border }]}
-            >
-              <Icon name="times" size={14} color={colors.tx2} />
-            </Pressable>
-          </View>
-        </View>
+      <ListenPlaybackScreen
+        hasWords={!!listen.words.length}
+        origWordNumber={listen.origWordNumber}
+        origTotalWords={listen.origTotalWords}
+        shuffle={listen.shuffle}
+        sleepRemainingSec={listen.sleepRemainingSec}
+        wordIndex={listen.wordIndex}
+        total={listen.total}
+        pieceKind={listen.pieceKind}
+        includeWord={listen.includeWord}
+        includeMeaning={listen.includeMeaning}
+        includeExample={listen.includeExample}
+        wordText={word ? word.originalGerman || word.mainGerman : ''}
+        wordMeaning={word?.meaning || ''}
+        germanExample={germanExample}
+        vietnameseExample={vietnameseExample}
+        isPlaying={listen.isPlaying}
+        hasPrev={listen.hasPrev}
+        hasNext={listen.hasNext}
+        onToggleIncludeWord={listen.toggleIncludeWord}
+        onToggleIncludeMeaning={listen.toggleIncludeMeaning}
+        onToggleIncludeExample={listen.toggleIncludeExample}
+        onToggleShuffle={listen.toggleShuffle}
+        onPrev={listen.prev}
+        onTogglePlay={listen.togglePlay}
+        onNext={listen.next}
+        onOpenSettings={openSettings}
+        onMinimize={listen.minimize}
+        onClose={listen.close}
+      />
 
-        {!listen.words.length ? (
-          <View style={styles.emptyBox}>
-            <Text style={{ color: colors.tx2, fontSize: 14, textAlign: 'center' }}>
-              Phiên này chưa có từ nào để nghe.
-            </Text>
-          </View>
-        ) : (
-          <ScrollView contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
-            <Text style={{ color: colors.tx3, fontSize: 12.5, marginBottom: 10 }}>
-              Từ {listen.origWordNumber} / {listen.origTotalWords}
-              {listen.shuffle ? <>{'  ·  '}<Icon name="random" size={10} color={colors.tx3} /> ngẫu nhiên</> : ''}
-              {listen.sleepRemainingSec != null ? <>{'  ·  '}<Icon name="clock" size={10} color={colors.tx3} /> còn {formatClock(listen.sleepRemainingSec)}</> : ''}
-            </Text>
-
-            <View style={[styles.progressTrack, { backgroundColor: colors.bg3 }]}>
-              <View
-                style={[
-                  styles.progressFill,
-                  { backgroundColor: accent.blue, width: `${((listen.wordIndex + 1) / Math.max(1, listen.total)) * 100}%` },
-                ]}
-              />
-            </View>
-
-            <View style={styles.card}>
-              <PieceLine
-                active={listen.pieceKind === 'word'}
-                dimmed={!listen.includeWord}
-                label="Từ"
-                text={word ? word.originalGerman || word.mainGerman : ''}
-                bigColor={colors.tx}
-                labelColor={colors.tx3}
-                onPress={listen.toggleIncludeWord}
-              />
-              <PieceLine
-                active={listen.pieceKind === 'meaning'}
-                dimmed={!listen.includeMeaning}
-                label="Nghĩa"
-                text={word?.meaning || ''}
-                bigColor={accent.blue}
-                labelColor={colors.tx3}
-                onPress={listen.toggleIncludeMeaning}
-              />
-              {!!germanExample && (
-                <PieceLine
-                  active={listen.pieceKind === 'exampleDe'}
-                  dimmed={!listen.includeExample}
-                  label="Ví dụ (Đức)"
-                  text={germanExample}
-                  bigColor={colors.tx2}
-                  labelColor={colors.tx3}
-                  small
-                  onPress={listen.toggleIncludeExample}
-                />
-              )}
-              {!!vietnameseExample && (
-                <PieceLine
-                  active={listen.pieceKind === 'exampleVi'}
-                  dimmed={!listen.includeExample}
-                  label="Ví dụ (Việt)"
-                  text={vietnameseExample}
-                  bigColor={colors.tx2}
-                  labelColor={colors.tx3}
-                  small
-                  onPress={listen.toggleIncludeExample}
-                />
-              )}
-              <Text style={{ color: colors.tx3, fontSize: 10.5, textAlign: 'center', marginTop: 2 }}>
-                Bấm vào từng mục để bật/tắt đọc mục đó
-              </Text>
-            </View>
-
-            <View style={styles.controlsRow}>
-              <Pressable
-                onPress={listen.toggleShuffle}
-                hitSlop={6}
-                style={[
-                  styles.sideToggleBtn,
-                  {
-                    backgroundColor: listen.shuffle ? accent.blue : colors.bg3,
-                    borderColor: listen.shuffle ? accent.blue : colors.border,
-                  },
-                ]}
-              >
-                <Icon name="random" size={15} color={listen.shuffle ? '#fff' : colors.tx2} />
-              </Pressable>
-              <Pressable
-                disabled={!listen.hasPrev}
-                onPress={listen.prev}
-                style={[styles.ctrlBtn, { backgroundColor: colors.bg3, borderColor: colors.border, opacity: listen.hasPrev ? 1 : 0.4 }]}
-              >
-                <Icon name="step-backward" size={16} color={colors.tx} />
-              </Pressable>
-              <Pressable
-                onPress={listen.togglePlay}
-                style={[styles.playBtn, { backgroundColor: accent.blue }]}
-              >
-                <Icon name={listen.isPlaying ? 'pause' : 'play'} size={19} color="#fff" />
-              </Pressable>
-              <Pressable
-                disabled={!listen.hasNext}
-                onPress={listen.next}
-                style={[styles.ctrlBtn, { backgroundColor: colors.bg3, borderColor: colors.border, opacity: listen.hasNext ? 1 : 0.4 }]}
-              >
-                <Icon name="step-forward" size={16} color={colors.tx} />
-              </Pressable>
-              <Pressable
-                onPress={openSettings}
-                hitSlop={6}
-                style={[styles.sideToggleBtn, { backgroundColor: colors.bg3, borderColor: colors.border }]}
-              >
-                <Icon name="cog" size={16} color={colors.tx2} />
-              </Pressable>
-            </View>
-
-            <Text style={{ color: colors.tx3, fontSize: 11, textAlign: 'center', marginTop: 4 }}>
-              Có thể tắt màn hình, chuyển sang app khác, hoặc bấm nút thu nhỏ để tiếp tục nghe ở nền — giọng đọc sẽ tiếp tục phát.
-            </Text>
-          </ScrollView>
-        )}
-      </View>
-
-      <BottomSheetModal visible={settingsPopupVisible} onClose={() => setSettingsPopupVisible(false)}>
+      <BottomSheetModal visible={settingsPopupVisible} onClose={closeSettingsPopup}>
         <ScrollView showsVerticalScrollIndicator={false}>
           {/* Nút "Lưu" chuyển từ cuối popup (phải cuộn hết mới thấy) lên
               cùng dòng với tiêu đề, góc phải — luôn hiện sẵn ngay khi mở
@@ -320,7 +248,7 @@ export default function ListenModeModal() {
           {!!listen.wordTypeGroups.length && (
             <SettingsSection title="Loại từ" icon="tag">
               <Pressable
-                onPress={() => setWordTypeFilterVisible(true)}
+                onPress={openWordTypeFilter}
                 style={[styles.filterBtn, { backgroundColor: colors.bg3, borderColor: colors.border }]}
               >
                 <Icon name="filter" size={12} color={colors.tx2} />
@@ -330,6 +258,23 @@ export default function ListenModeModal() {
                     : `Đang nghe ${draft.wordTypeFilter.length}/${listen.wordTypeGroups.length} loại`}
                 </Text>
                 {draft.sortByWordType && <Icon name="sort-amount-down" size={12} color={accent.blue} style={{ marginRight: 6 }} />}
+                <Icon name="chevron-down" size={12} color={colors.tx3} />
+              </Pressable>
+            </SettingsSection>
+          )}
+
+          {!!listen.statusGroups.length && (
+            <SettingsSection title="Trạng thái từ" icon="check-square">
+              <Pressable
+                onPress={openStatusFilter}
+                style={[styles.filterBtn, { backgroundColor: colors.bg3, borderColor: colors.border }]}
+              >
+                <Icon name="filter" size={12} color={colors.tx2} />
+                <Text style={{ color: colors.tx, fontSize: 13, marginLeft: 8, flex: 1 }} numberOfLines={1}>
+                  {draft.statusFilter === null
+                    ? `Đang nghe tất cả (${listen.statusGroups.length} trạng thái)`
+                    : `Đang nghe ${draft.statusFilter.length}/${listen.statusGroups.length} trạng thái`}
+                </Text>
                 <Icon name="chevron-down" size={12} color={colors.tx3} />
               </Pressable>
             </SettingsSection>
@@ -383,13 +328,26 @@ export default function ListenModeModal() {
 
       <WordTypeFilterDropdown
         visible={wordTypeFilterVisible}
-        onClose={() => setWordTypeFilterVisible(false)}
-        wordTypeGroups={listen.wordTypeGroups}
-        wordTypeFilter={draft.wordTypeFilter}
+        onClose={closeWordTypeFilter}
+        title="Lọc loại từ"
+        unitLabel="loại từ"
+        groups={listen.wordTypeGroups}
+        filter={draft.wordTypeFilter}
         onToggle={draftToggleWordType}
         onSelectAll={draftSelectAllWordTypes}
         sortByWordType={draft.sortByWordType}
         onToggleSort={draftToggleSort}
+      />
+
+      <WordTypeFilterDropdown
+        visible={statusFilterVisible}
+        onClose={closeStatusFilter}
+        title="Lọc trạng thái từ"
+        unitLabel="trạng thái"
+        groups={listen.statusGroups}
+        filter={draft.statusFilter}
+        onToggle={draftToggleStatus}
+        onSelectAll={draftSelectAllStatuses}
       />
     </Modal>
   );
@@ -400,6 +358,209 @@ function formatClock(totalSec: number): string {
   const s = totalSec % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
+
+/**
+ * Màn hình "Nghe từ vựng" chính (thẻ từ + cụm nút phát) — TÁCH RIÊNG khỏi
+ * ListenModeModal + bọc React.memo để SỬA LỖI LAG khi thao tác 2 popup lọc
+ * lồng bên trong (xem chú thích chi tiết ở khai báo các hàm draftXxx trong
+ * ListenModeModal). Component này KHÔNG phụ thuộc `draft` (bản nháp cài
+ * đặt) chút nào — chỉ nhận đúng những giá trị/callback nó cần hiển thị
+ * dưới dạng props NGUYÊN THUỶ (string/number/boolean/hàm), để React.memo so
+ * sánh nông (shallow compare) hoạt động đúng: tick 1 checkbox trong popup
+ * lọc lồng bên trong không còn khiến màn hình NÀY (đang hiển thị CÙNG lúc,
+ * dưới dạng 1 Modal khác) phải vẽ lại theo.
+ */
+interface ListenPlaybackScreenProps {
+  hasWords: boolean;
+  origWordNumber: number;
+  origTotalWords: number;
+  shuffle: boolean;
+  sleepRemainingSec: number | null;
+  wordIndex: number;
+  total: number;
+  pieceKind: string | null;
+  includeWord: boolean;
+  includeMeaning: boolean;
+  includeExample: boolean;
+  wordText: string;
+  wordMeaning: string;
+  germanExample: string;
+  vietnameseExample: string;
+  isPlaying: boolean;
+  hasPrev: boolean;
+  hasNext: boolean;
+  onToggleIncludeWord: () => void;
+  onToggleIncludeMeaning: () => void;
+  onToggleIncludeExample: () => void;
+  onToggleShuffle: () => void;
+  onPrev: () => void;
+  onTogglePlay: () => void;
+  onNext: () => void;
+  onOpenSettings: () => void;
+  onMinimize: () => void;
+  onClose: () => void;
+}
+
+function ListenPlaybackScreenBase({
+  hasWords,
+  origWordNumber,
+  origTotalWords,
+  shuffle,
+  sleepRemainingSec,
+  wordIndex,
+  total,
+  pieceKind,
+  includeWord,
+  includeMeaning,
+  includeExample,
+  wordText,
+  wordMeaning,
+  germanExample,
+  vietnameseExample,
+  isPlaying,
+  hasPrev,
+  hasNext,
+  onToggleIncludeWord,
+  onToggleIncludeMeaning,
+  onToggleIncludeExample,
+  onToggleShuffle,
+  onPrev,
+  onTogglePlay,
+  onNext,
+  onOpenSettings,
+  onMinimize,
+  onClose,
+}: ListenPlaybackScreenProps) {
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View style={[styles.screen, { backgroundColor: colors.bg, paddingTop: insets.top + 8, paddingBottom: insets.bottom + 12 }]}>
+      <View style={styles.headerRow}>
+        <Text style={[styles.title, { color: colors.tx }]}>
+          <Icon name="headphones-alt" size={16} color={colors.tx} />{'  '}Nghe từ vựng
+        </Text>
+        <View style={styles.headerBtns}>
+          <Pressable onPress={onMinimize} hitSlop={8} style={[styles.closeBtn, { backgroundColor: colors.bg3, borderColor: colors.border }]}>
+            <Icon name="minus" size={14} color={colors.tx2} />
+          </Pressable>
+          <Pressable onPress={onClose} hitSlop={8} style={[styles.closeBtn, { backgroundColor: colors.bg3, borderColor: colors.border }]}>
+            <Icon name="times" size={14} color={colors.tx2} />
+          </Pressable>
+        </View>
+      </View>
+
+      {!hasWords ? (
+        <View style={styles.emptyBox}>
+          <Text style={{ color: colors.tx2, fontSize: 14, textAlign: 'center' }}>Phiên này chưa có từ nào để nghe.</Text>
+        </View>
+      ) : (
+        <ScrollView contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
+          <Text style={{ color: colors.tx3, fontSize: 12.5, marginBottom: 10 }}>
+            Từ {origWordNumber} / {origTotalWords}
+            {shuffle ? <>{'  ·  '}<Icon name="random" size={10} color={colors.tx3} /> ngẫu nhiên</> : ''}
+            {sleepRemainingSec != null ? <>{'  ·  '}<Icon name="clock" size={10} color={colors.tx3} /> còn {formatClock(sleepRemainingSec)}</> : ''}
+          </Text>
+
+          <View style={[styles.progressTrack, { backgroundColor: colors.bg3 }]}>
+            <View style={[styles.progressFill, { backgroundColor: accent.blue, width: `${((wordIndex + 1) / Math.max(1, total)) * 100}%` }]} />
+          </View>
+
+          <View style={styles.card}>
+            <PieceLine
+              active={pieceKind === 'word'}
+              dimmed={!includeWord}
+              label="Từ"
+              text={wordText}
+              bigColor={colors.tx}
+              labelColor={colors.tx3}
+              onPress={onToggleIncludeWord}
+            />
+            <PieceLine
+              active={pieceKind === 'meaning'}
+              dimmed={!includeMeaning}
+              label="Nghĩa"
+              text={wordMeaning}
+              bigColor={accent.blue}
+              labelColor={colors.tx3}
+              onPress={onToggleIncludeMeaning}
+            />
+            {!!germanExample && (
+              <PieceLine
+                active={pieceKind === 'exampleDe'}
+                dimmed={!includeExample}
+                label="Ví dụ (Đức)"
+                text={germanExample}
+                bigColor={colors.tx2}
+                labelColor={colors.tx3}
+                small
+                onPress={onToggleIncludeExample}
+              />
+            )}
+            {!!vietnameseExample && (
+              <PieceLine
+                active={pieceKind === 'exampleVi'}
+                dimmed={!includeExample}
+                label="Ví dụ (Việt)"
+                text={vietnameseExample}
+                bigColor={colors.tx2}
+                labelColor={colors.tx3}
+                small
+                onPress={onToggleIncludeExample}
+              />
+            )}
+            <Text style={{ color: colors.tx3, fontSize: 10.5, textAlign: 'center', marginTop: 2 }}>Bấm vào từng mục để bật/tắt đọc mục đó</Text>
+          </View>
+
+          <View style={styles.controlsRow}>
+            <Pressable
+              onPress={onToggleShuffle}
+              hitSlop={6}
+              style={[styles.sideToggleBtn, { backgroundColor: shuffle ? accent.blue : colors.bg3, borderColor: shuffle ? accent.blue : colors.border }]}
+            >
+              <Icon name="random" size={15} color={shuffle ? '#fff' : colors.tx2} />
+            </Pressable>
+            <Pressable
+              disabled={!hasPrev}
+              onPress={onPrev}
+              style={[styles.ctrlBtn, { backgroundColor: colors.bg3, borderColor: colors.border, opacity: hasPrev ? 1 : 0.4 }]}
+            >
+              <Icon name="step-backward" size={16} color={colors.tx} />
+            </Pressable>
+            <Pressable onPress={onTogglePlay} style={[styles.playBtn, { backgroundColor: accent.blue }]}>
+              <Icon name={isPlaying ? 'pause' : 'play'} size={19} color="#fff" />
+            </Pressable>
+            <Pressable
+              disabled={!hasNext}
+              onPress={onNext}
+              style={[styles.ctrlBtn, { backgroundColor: colors.bg3, borderColor: colors.border, opacity: hasNext ? 1 : 0.4 }]}
+            >
+              <Icon name="step-forward" size={16} color={colors.tx} />
+            </Pressable>
+            <Pressable onPress={onOpenSettings} hitSlop={6} style={[styles.sideToggleBtn, { backgroundColor: colors.bg3, borderColor: colors.border }]}>
+              <Icon name="cog" size={16} color={colors.tx2} />
+            </Pressable>
+          </View>
+
+          <Text style={{ color: colors.tx3, fontSize: 11, textAlign: 'center', marginTop: 4 }}>
+            Có thể tắt màn hình, chuyển sang app khác, hoặc bấm nút thu nhỏ để tiếp tục nghe ở nền — giọng đọc sẽ tiếp tục phát.
+          </Text>
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+const MemoizedListenPlaybackScreen = React.memo(ListenPlaybackScreenBase);
+MemoizedListenPlaybackScreen.displayName = 'ListenPlaybackScreen';
+// Vẫn phải dùng cùng tên `ListenPlaybackScreen` (var, không phải function
+// declaration) TRƯỚC chỗ ListenModeModal tham chiếu tới nó trong JSX phía
+// trên — nhưng function declarations/`const` ở CUỐI file vẫn nhìn thấy
+// được từ đầu file trong cùng module nhờ cách JS xử lý scope của cả module
+// (ListenModeModal chỉ thực sự CHẠY lúc được React gọi render, lúc đó toàn
+// bộ file đã được nạp xong) — nên khai báo `const ListenPlaybackScreen`
+// dưới này vẫn hoạt động đúng dù nằm sau chỗ dùng trong code.
+const ListenPlaybackScreen = MemoizedListenPlaybackScreen;
 
 function PieceLine({
   active,
