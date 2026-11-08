@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { View, Text, Animated, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { mobile } from '@/theme/theme';
@@ -31,8 +31,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     [opacity]
   );
 
+  const ctxValue = useMemo(() => ({ showToast }), [showToast]);
+
   return (
-    <ToastContext.Provider value={{ showToast }}>
+    <ToastContext.Provider value={ctxValue}>
       {children}
       {message ? (
         <View

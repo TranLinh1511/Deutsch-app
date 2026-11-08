@@ -49,7 +49,11 @@ try {
 let db;
 try {
   db = initializeFirestore(app, {
-    experimentalAutoDetectLongPolling: true,
+    // ÉP long-polling ngay từ đầu. experimentalAutoDetectLongPolling vẫn phải
+    // chờ một khoảng timeout dò WebChannel (vài giây) ở MỖI lần mở kết nối —
+    // đó chính là độ trễ "mở app / tải dữ liệu rất chậm". RN/Hermes không
+    // hỗ trợ streaming nên ép thẳng long-polling là nhanh và ổn định nhất.
+    experimentalForceLongPolling: true,
     useFetchStreams: false,
   });
 } catch {

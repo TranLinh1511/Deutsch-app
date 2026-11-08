@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setTtsSoundEnabled } from '@/services/tts';
@@ -137,65 +137,70 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     return () => sub.remove();
   }, [notifEnabled, notifIntervalMinutes]);
 
-  const toggleSound = () => {
+  const toggleSound = useCallback(() => {
     setSoundEnabled((prev) => {
       const next = !prev;
       setTtsSoundEnabled(next);
       AsyncStorage.setItem(KEYS.sound, next ? 'true' : 'false');
       return next;
     });
-  };
+  }, []);
 
-  const setBreakEnabled = (v: boolean) => {
+  const setBreakEnabled = useCallback((v: boolean) => {
     setBreakEnabledState(v);
     AsyncStorage.setItem(KEYS.breakEnabled, v ? 'true' : 'false');
-  };
-  const setBreakWorkMinutes = (n: number) => {
+  }, []);
+  const setBreakWorkMinutes = useCallback((n: number) => {
     setBreakWorkMinutesState(n);
     AsyncStorage.setItem(KEYS.breakWork, String(n));
-  };
-  const setBreakRestMinutes = (n: number) => {
+  }, []);
+  const setBreakRestMinutes = useCallback((n: number) => {
     setBreakRestMinutesState(n);
     AsyncStorage.setItem(KEYS.breakRest, String(n));
-  };
+  }, []);
 
-  const setNotifEnabled = (v: boolean) => {
+  const setNotifEnabled = useCallback((v: boolean) => {
     setNotifEnabledState(v);
     AsyncStorage.setItem(KEYS.notifEnabled, v ? 'true' : 'false');
-  };
-  const setNotifIntervalMinutes = (n: number) => {
+  }, []);
+  const setNotifIntervalMinutes = useCallback((n: number) => {
     const clamped = Math.max(NOTIF_INTERVAL_MIN_MINUTES, Math.min(NOTIF_INTERVAL_MAX_MINUTES, Math.round(n)));
     setNotifIntervalMinutesState(clamped);
     AsyncStorage.setItem(KEYS.notifIntervalMinutes, String(clamped));
-  };
+  }, []);
 
-  const setAutoHideHint = (v: boolean) => {
+  const setAutoHideHint = useCallback((v: boolean) => {
     setAutoHideHintState(v);
     AsyncStorage.setItem(KEYS.autoHideHint, v ? 'true' : 'false');
-  };
+  }, []);
 
-  return (
-    <SettingsContext.Provider
-      value={{
-        soundEnabled,
-        toggleSound,
-        breakEnabled,
-        setBreakEnabled,
-        breakWorkMinutes,
-        setBreakWorkMinutes,
-        breakRestMinutes,
-        setBreakRestMinutes,
-        notifEnabled,
-        setNotifEnabled,
-        notifIntervalMinutes,
-        setNotifIntervalMinutes,
-        autoHideHint,
-        setAutoHideHint,
-      }}
-    >
-      {children}
-    </SettingsContext.Provider>
+  // useMemo: không tạo object mới mỗi lần render → các màn hình dùng
+  // useSettings() không bị render lại vô ích khi DataStore đổi.
+  const value = useMemo(
+    () => ({
+      soundEnabled,
+      toggleSound,
+      breakEnabled,
+      setBreakEnabled,
+      breakWorkMinutes,
+      setBreakWorkMinutes,
+      breakRestMinutes,
+      setBreakRestMinutes,
+      notifEnabled,
+      setNotifEnabled,
+      notifIntervalMinutes,
+      setNotifIntervalMinutes,
+      autoHideHint,
+      setAutoHideHint,
+    }),
+    [
+      soundEnabled, toggleSound, breakEnabled, setBreakEnabled, breakWorkMinutes, setBreakWorkMinutes,
+      breakRestMinutes, setBreakRestMinutes, notifEnabled, setNotifEnabled, notifIntervalMinutes,
+      setNotifIntervalMinutes, autoHideHint, setAutoHideHint,
+    ]
   );
+
+  return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
 }
 
 export function useSettings() {

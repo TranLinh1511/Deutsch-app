@@ -2,9 +2,12 @@ import React, { useEffect, useRef } from 'react';
 import { TextInput, Animated, StyleSheet } from 'react-native';
 import { useTheme } from '@/theme/ThemeContext';
 import { mobile, fonts } from '@/theme/theme';
+import { useAnswerValue, type AnswerStore } from '@/hooks/answerStore';
 
 interface ExerciseAnswerInputProps {
-  value: string;
+  /** Store chứa chữ đang gõ — CHỈ component này đăng ký theo dõi, nên gõ phím
+   * không làm MainScreen (hay bất kỳ component cha nào) render lại. */
+  store: AnswerStore;
   status: 'idle' | 'correct' | 'wrong';
   onChangeText: (t: string) => void;
   onSubmit: () => void;
@@ -18,27 +21,28 @@ const STATUS_TO_NUM = { idle: 0, correct: 1, wrong: 2 } as const;
 
 /**
  * index.html: #dynamicAnswerInput — .correct-border (green) / .wrong-border
- * (red), `transition: border-color 0.3s cubic-bezier(0.4,0,0.2,1)`.
- * Animated.Value + color interpolation ports that smooth transition
- * instead of an instant color swap.
+ * (red), `transition: border-color 0.3s`.
  *
- * GIỮ FOCUS KHI CHUYỂN CÂU: trước đây khi hoàn thành câu (bấm Enter/nút
- * "chuyển câu tiếp theo"), bàn phím tự đóng — do (1) TextInput mặc định
- * `blurOnSubmit` = true nên bấm Enter tự blur, và (2) chạm vào nút ⏭ nằm
- * ngoài ô nhập cũng tự blur ô đang focus (hành vi mặc định của RN/hệ điều
- * hành). Sửa bằng cách: tắt blurOnSubmit, tự theo dõi focus hiện tại qua
- * ref, và mỗi khi câu hỏi đổi (questionKey đổi) — NẾU trước đó ô đang được
- * focus — tự gọi lại focus() để bàn phím không bị đóng giữa hai câu.
+ * TỐI ƯU GÕ MƯỢT (so với bản cũ):
+ *  1) Chữ đang gõ đọc từ `store` (useSyncExternalStore) thay vì prop từ
+ *     MainScreen → mỗi phím chỉ render lại đúng ô nhập này.
+ *  2) Viền động chuyển sang Animated.View BAO NGOÀI, ô TextInput bên trong
+ *     là TextInput thường. Trước đây TextInput là Animated component bị
+ *     JS-driver gọi setNativeProps mỗi khung hình khi đổi viền — dễ gây
+ *     chớp/đứng chữ trên iOS ngay lúc đang gõ (nhất là khi gõ xong từ đúng).
+ *  3) Giữ nguyên cơ chế giữ focus khi chuyển câu (blurOnSubmit=false,
+ *     focus() lại khi questionKey đổi nếu trước đó đang focus).
  */
-export default function ExerciseAnswerInput({
-  value,
+function ExerciseAnswerInput({
+  store,
   status,
   onChangeText,
   onSubmit,
   placeholder,
   questionKey,
 }: ExerciseAnswerInputProps) {
-  const { colors } = useTheme();
+  const { colors, mode } = useTheme();
+  const value = useAnswerValue(store);
   const anim = useRef(new Animated.Value(STATUS_TO_NUM.idle)).current;
   const inputRef = useRef<TextInput>(null);
   const wasFocusedRef = useRef(false);
@@ -65,8 +69,13 @@ export default function ExerciseAnswerInput({
   });
 
   return (
-    <Animated.View style={{ marginTop: 12 }}>
-      <AnimatedTextInput
+    <Animated.View
+      style={[
+        styles.frame,
+        { backgroundColor: colors.inputBg, borderColor: borderColor as unknown as string },
+      ]}
+    >
+      <TextInput
         ref={inputRef}
         value={value}
         onChangeText={onChangeText}
@@ -82,22 +91,27 @@ export default function ExerciseAnswerInput({
         placeholderTextColor={colors.tx3}
         autoCapitalize="none"
         autoCorrect={false}
-        style={[
-          styles.input,
-          { color: colors.inputColor, backgroundColor: colors.inputBg, borderColor: borderColor as unknown as string },
-        ]}
+        spellCheck={false}
+        autoComplete="off"
+        textContentType="none"
+        keyboardAppearance={mode === 'light' ? 'light' : 'dark'}
+        style={[styles.input, { color: colors.inputColor }]}
       />
     </Animated.View>
   );
 }
 
-const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
+export default React.memo(ExerciseAnswerInput);
 
 const styles = StyleSheet.create({
-  input: {
+  frame: {
+    marginTop: 12,
     width: '100%',
     borderWidth: 2,
     borderRadius: 10,
+  },
+  input: {
+    width: '100%',
     fontSize: mobile.answerInputSize,
     padding: mobile.answerInputPadding,
     fontFamily: fonts.mono,

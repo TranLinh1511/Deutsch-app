@@ -32,9 +32,21 @@ export async function cacheRemove(key: string): Promise<void> {
   }
 }
 
-/** Mirrors bootstrap()'s startup cleanup of stale vocab_/cache_mastered_/cache_flagged_ keys */
+/**
+ * Dọn cache từ vựng/mastered/flagged cũ. TRƯỚC ĐÂY chạy ở MỖI lần mở app →
+ * xoá sạch cache rồi bắt buộc tải lại toàn bộ từ Firestore (nguyên nhân
+ * chính khiến khởi động chậm). Giờ chỉ dọn MỘT LẦN khi đổi phiên bản định
+ * dạng cache (CACHE_SCHEMA_VERSION); dữ liệu luôn được làm tươi ở nền bằng
+ * stale-while-revalidate + realtime listener nên không cần xoá nữa.
+ */
+const CACHE_SCHEMA_VERSION = '2';
+const CACHE_SCHEMA_KEY = 'beitl_cache_schema_version';
+
 export async function clearStaleVocabCaches(): Promise<void> {
   try {
+    const current = await AsyncStorage.getItem(CACHE_SCHEMA_KEY);
+    if (current === CACHE_SCHEMA_VERSION) return;
+    await AsyncStorage.setItem(CACHE_SCHEMA_KEY, CACHE_SCHEMA_VERSION);
     const keys = await AsyncStorage.getAllKeys();
     const stale = keys.filter(
       (k) => k.startsWith('vocab_') || k.startsWith('cache_mastered_') || k.startsWith('cache_flagged_')

@@ -19,6 +19,7 @@ import {
   getGermanExample,
 } from '@/utils/grading';
 import { speakForMode, speakText } from '@/services/tts';
+import { createAnswerStore } from './answerStore';
 
 /**
  * Practice engine — mirrors the module-level exercise state in index.html
@@ -105,7 +106,10 @@ export function usePracticeEngine() {
   const [mixRound, setMixRound] = useState(0);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [answerValue, setAnswerValue] = useState('');
+  // Chữ đang gõ KHÔNG nằm trong React state (xem answerStore.ts) để gõ phím
+  // không làm MainScreen render lại. `answerStore.get()` luôn là giá trị mới nhất.
+  const answerStore = useRef(createAnswerStore()).current;
+  const setAnswerValue = answerStore.set;
   const [inputStatus, setInputStatus] = useState<'idle' | 'correct' | 'wrong'>('idle');
   const [revealedExample, setRevealedExample] = useState<string | null>(null);
   const [stats, setStats] = useState({ correct: 0, total: 0 });
@@ -278,8 +282,14 @@ export function usePracticeEngine() {
       currentIndex,
       mixRound,
     };
+    // Cache trong bộ nhớ cập nhật ngay; còn ghi xuống đĩa (stringify cả danh
+    // sách id — có thể hàng nghìn phần tử) thì trì hoãn 700ms để chuyển câu
+    // liên tục không phải ghi AsyncStorage sau MỖI câu.
     studyStateCacheRef.current.set(studyStateKey, payload);
-    AsyncStorage.setItem(studyStateKey, JSON.stringify(payload));
+    const t = setTimeout(() => {
+      AsyncStorage.setItem(studyStateKey, JSON.stringify(payload)).catch(() => {});
+    }, 700);
+    return () => clearTimeout(t);
   }, [studyStateKey, questions, batchIdx, currentIndex, mixRound]);
 
   const visibleQuestions = useMemo(() => {
@@ -434,7 +444,7 @@ export function usePracticeEngine() {
   const submitStudyAnswer = useCallback(() => {
     if (!studyMode || !currentQuestion || waitingForAutoNext.current) return;
 
-    const ok = computeIsCorrect(answerValue);
+    const ok = computeIsCorrect(answerStore.get());
 
     if (!ok) {
       setInputStatus('wrong');
@@ -468,7 +478,7 @@ export function usePracticeEngine() {
       },
       effectiveType === 'fullSentence' ? 1000 : 500
     );
-  }, [studyMode, currentQuestion, answerValue, effectiveType, exerciseMode, strictVocabCheck]);
+  }, [studyMode, currentQuestion, answerStore, effectiveType, exerciseMode, strictVocabCheck]);
 
   // Chế độ luyện "Phát âm": mỗi lần bấm mic nói xong LÀ một lượt trả lời
   // hoàn chỉnh (khác Viết — không có khái niệm "đang gõ dở"), nên không cần
@@ -666,7 +676,7 @@ export function usePracticeEngine() {
     effectiveType,
     stats,
 
-    answerValue,
+    answerStore,
     inputStatus,
     revealedExample,
     onAnswerChange,

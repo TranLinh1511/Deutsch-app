@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { subscribeToAuthState, logout as firebaseLogout, getDisplayName } from '@/services/firebase/auth';
 
@@ -52,8 +52,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             await firebaseLogout();
             setUser(null);
           } else {
-            const displayName = await getDisplayName(fbUser.uid, fbUser.email ?? 'Người dùng');
-            setUser({ uid: fbUser.uid, displayName });
+            // Vào app NGAY với tên tạm (email/uid đã có sẵn từ Firebase Auth), rồi
+            // mới đọc tên thật từ Firestore ở nền và cập nhật. Trước đây phải chờ
+            // một vòng mạng getDoc xong mới thoát màn hình spinner đầu tiên.
+            const fallbackName = fbUser.email ?? 'Người dùng';
+            setUser({ uid: fbUser.uid, displayName: fallbackName });
+            getDisplayName(fbUser.uid, fallbackName)
+              .then((name) =>
+                setUser((prev) => (prev && prev.uid === fbUser.uid && prev.displayName !== name ? { ...prev, displayName: name } : prev))
+              )
+              .catch(() => {});
           }
         } else {
           setUser(null);
@@ -65,22 +73,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => unsub?.();
   }, []);
 
-  const setSessionUser = async (u: AuthUser, remember: boolean) => {
+  const setSessionUser = useCallback(async (u: AuthUser, remember: boolean) => {
     await AsyncStorage.setItem(REMEMBER_KEY, remember ? 'true' : 'false');
     setUser(u);
-  };
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     await AsyncStorage.removeItem(REMEMBER_KEY);
     await firebaseLogout();
     setUser(null);
-  };
+  }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, isLoading, setSessionUser, logout }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  const value = useMemo(() => ({ user, isLoading, setSessionUser, logout }), [user, isLoading, setSessionUser, logout]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

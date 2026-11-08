@@ -9,7 +9,7 @@ import { useDataStore } from '@/store/DataStore';
 import { usePracticeEngine } from '@/hooks/usePracticeEngine';
 import { generateChoices } from '@/utils/questionBuilder';
 import { buildPromptDisplay } from '@/utils/promptDisplay';
-import { buildHintContent } from '@/utils/hint';
+import HintBox from '@/components/practice/HintBox';
 import MobileStatsBar from '@/components/practice/MobileStatsBar';
 import ExercisePromptCard from '@/components/practice/ExercisePromptCard';
 import ExerciseAnswerInput from '@/components/practice/ExerciseAnswerInput';
@@ -67,7 +67,7 @@ export default function MainScreen() {
     exerciseType,
     exerciseMode,
     stats,
-    answerValue,
+    answerStore,
     inputStatus,
     revealedExample,
     onAnswerChange,
@@ -104,11 +104,6 @@ export default function MainScreen() {
     if (!currentQuestion || exerciseMode !== 'choose') return [];
     return generateChoices(currentQuestion, questions, effectiveType, exerciseMode);
   }, [currentQuestion, questions, effectiveType, exerciseMode]);
-
-  const hintContent = useMemo(() => {
-    if (!currentQuestion || !hintVisible) return null;
-    return buildHintContent(currentQuestion, effectiveType, exerciseMode, answerValue);
-  }, [currentQuestion, hintVisible, effectiveType, exerciseMode, answerValue]);
 
   const progressPct = questions.length ? ((currentIndex + 1) / questions.length) * 100 : 0;
 
@@ -190,7 +185,7 @@ export default function MainScreen() {
   // biết vì sao thay vì im lặng không phản hồi gì. Nút "⏭ Từ tiếp theo" và
   // "⏮ Từ trước đó" trong ExerciseActionsRow KHÔNG đi qua hàm này nữa, luôn
   // hoạt động bất kể trạng thái đúng/sai hay công tắc allowSkip.
-  const handleNext = () => {
+  const handleNext = useCallback(() => {
     if (studyMode) {
       // Chế độ học bài (phần viết): Enter/gửi câu trả lời mới chấm điểm —
       // đúng thì hiện viền xanh rồi mới xoá trắng để gõ lại; sai thì báo lỗi
@@ -203,7 +198,7 @@ export default function MainScreen() {
       return;
     }
     skip();
-  };
+  }, [studyMode, canSkip, submitStudyAnswer, skip, showToast]);
 
   return (
     <SafeAreaView edges={['top', 'left', 'right']} style={[styles.safe, { backgroundColor: colors.bg }]}>
@@ -272,7 +267,7 @@ export default function MainScreen() {
               />
             ) : exerciseMode === 'speak' ? (
               <SpeakAnswerInput
-                value={answerValue}
+                store={answerStore}
                 status={inputStatus}
                 onResult={submitSpokenAnswer}
                 lang={effectiveType === 'fullMeaning' ? 'vi-VN' : 'de-DE'}
@@ -281,7 +276,7 @@ export default function MainScreen() {
               />
             ) : (
               <ExerciseAnswerInput
-                value={answerValue}
+                store={answerStore}
                 status={inputStatus}
                 onChangeText={onAnswerChange}
                 onSubmit={handleNext}
@@ -300,26 +295,13 @@ export default function MainScreen() {
               onNext={moveNext}
             />
 
-            {hintContent && (
-              <View style={[styles.hintBox, { backgroundColor: 'rgba(210,168,255,0.07)', borderColor: 'rgba(210,168,255,0.2)' }]}>
-                {hintContent.kind === 'text' ? (
-                  <Text style={{ color: '#d2a8ff', fontSize: 14.4, fontFamily: 'DM Mono' }}>{hintContent.text}</Text>
-                ) : (
-                  <Text style={{ fontSize: 14.4, fontFamily: 'DM Mono' }}>
-                    {hintContent.chars.map((c, i) => (
-                      <Text
-                        key={i}
-                        style={{
-                          color: c.state === 'bad' ? '#f78166' : c.state === 'ok' ? colors.tx : '#d2a8ff',
-                          textDecorationLine: c.state === 'bad' ? 'underline' : 'none',
-                        }}
-                      >
-                        {c.ch}
-                      </Text>
-                    ))}
-                  </Text>
-                )}
-              </View>
+            {hintVisible && (
+              <HintBox
+                question={currentQuestion}
+                effectiveType={effectiveType}
+                exerciseMode={exerciseMode}
+                store={answerStore}
+              />
             )}
 
             {revealedExample && (
@@ -379,5 +361,4 @@ const styles = StyleSheet.create({
   body: { paddingVertical: 12, paddingHorizontal: 10, flexGrow: 1 },
   emptyBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
   exampleBox: { borderWidth: 1, borderRadius: 8, padding: 10, marginTop: 12 },
-  hintBox: { borderWidth: 1, borderRadius: 8, padding: 10, marginTop: 10 },
 });

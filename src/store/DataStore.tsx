@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import { clearStaleVocabCaches, cacheGet, cacheSet } from '@/services/cache';
 import { dbGetAllSessions, dbSaveSession, dbDeleteSession } from '@/services/firebase/sessions';
@@ -9,9 +9,12 @@ import {
   dbDeleteWord,
   getVocabCacheEntry,
 } from '@/services/firebase/words';
+import { onRevalidated } from '@/services/firebase/revalidate';
 import {
   dbGetMastered,
   dbGetFlagged,
+  getMasteredCacheEntry,
+  getFlaggedCacheEntry,
   dbMarkMastered,
   dbUnmarkMastered,
   dbMarkFlagged,
@@ -123,17 +126,42 @@ export function DataStoreProvider({ children }: { children: React.ReactNode }) {
 
   const uidRef = useRef<string | null>(null);
   uidRef.current = user?.uid ?? null;
+  const currentSessionIdRef = useRef<string | null>(null);
+  currentSessionIdRef.current = currentSessionId;
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+  const mergedIdsRef = useRef(mergedSessionIds);
+  mergedIdsRef.current = mergedSessionIds;
 
-  const onRemoteUpdate = useCallback(
-    async (kind: 'vocab' | 'mastered' | 'flagged', sid: string) => {
+  // SỬA BUG: trước đây onRemoteUpdate là useCallback phụ thuộc currentSessionId
+  // và được đưa vào switchRealtimeSession ngay lúc phiên ĐANG là null → closure
+  // cũ luôn thấy currentSessionId = null → `sid !== currentSessionId` luôn đúng
+  // → thay đổi từ thiết bị khác không bao giờ cập nhật lên UI. Đọc qua ref
+  // nên luôn đúng, và hàm này ổn định (không đổi tham chiếu).
+  const onRemoteUpdate = useCallback(async (kind: 'vocab' | 'mastered' | 'flagged', sid: string) => {
+    const uid = uidRef.current;
+    if (!uid) return;
+    if (sourceRef.current === 'merged' && mergedIdsRef.current.includes(sid)) {
+      setMergedRefreshTick((t) => t + 1);
+    }
+    if (sid !== currentSessionIdRef.current) return;
+    if (kind === 'vocab') setVocab(getVocabCacheEntry(sid) ?? (await dbGetSessionVocab(uid, sid)));
+    if (kind === 'mastered') setMasteredIds(getMasteredCacheEntry(sid) ?? (await dbGetMastered(uid, sid)));
+    if (kind === 'flagged') setFlaggedIds(getFlaggedCacheEntry(sid) ?? (await dbGetFlagged(uid, sid)));
+  }, []);
+
+  // Dữ liệu cache hiển thị trước, bản tải nền về khác → cập nhật UI.
+  useEffect(() => {
+    return onRevalidated((kind, sid) => {
       const uid = uidRef.current;
-      if (!uid || sid !== currentSessionId) return;
-      if (kind === 'vocab') setVocab(getVocabCacheEntry(sid) ?? (await dbGetSessionVocab(uid, sid)));
-      if (kind === 'mastered') setMasteredIds(await dbGetMastered(uid, sid));
-      if (kind === 'flagged') setFlaggedIds(await dbGetFlagged(uid, sid));
-    },
-    [currentSessionId]
-  );
+      if (!uid) return;
+      if (kind === 'sessions') {
+        dbGetAllSessions(uid).then(setSessions).catch(() => {});
+        return;
+      }
+      onRemoteUpdate(kind, sid);
+    });
+  }, [onRemoteUpdate]);
 
   // ---- bootstrap() equivalent ----
   useEffect(() => {
@@ -157,9 +185,16 @@ export function DataStoreProvider({ children }: { children: React.ReactNode }) {
 
     (async () => {
       setIsLoading(true);
-      await clearStaleVocabCaches();
+      await clearStaleVocabCaches(); // chỉ thật sự dọn khi đổi phiên bản cache (rất nhanh các lần sau)
 
-      let sess = await dbGetAllSessions(user.uid);
+      // Các lượt đọc độc lập chạy SONG SONG thay vì nối đuôi nhau (trước đây
+      // sessions → folders → savedId → savedMerge, mỗi bước chờ bước trước).
+      const [sessResult, savedId, savedMerge] = await Promise.all([
+        dbGetAllSessions(user.uid),
+        cacheGet<string>(CURRENT_SESSION_KEY(user.uid)),
+        cacheGet<{ source: 'session' | 'merged'; mergedSessionIds: string[] }>(MERGE_STATE_KEY(user.uid)),
+      ]);
+      let sess = sessResult;
       if (!sess.length) {
         const def: Session = { id: 'sess_' + Date.now(), name: 'Mặc định', createdAt: Date.now() };
         await dbSaveSession(user.uid, def);
@@ -168,20 +203,16 @@ export function DataStoreProvider({ children }: { children: React.ReactNode }) {
       }
       setSessions(sess);
 
-      const foldersData = await getFolders(user.uid);
-      setFolders(foldersData);
+      // Thư mục chỉ cần cho sidebar/folder manager — KHÔNG chặn màn hình chính.
+      getFolders(user.uid)
+        .then(setFolders)
+        .catch(() => {});
 
-      const savedId = await cacheGet<string>(CURRENT_SESSION_KEY(user.uid));
       const initialId = sess.find((s) => s.id === savedId)?.id ?? sess[0].id;
       await activateSession(user.uid, initialId);
 
       // Nạp lại trạng thái "Gộp phiên" đã lưu từ lần trước (nếu có) — lọc
-      // bỏ những id phiên không còn tồn tại nữa (đã bị xoá) để tránh gộp
-      // nhầm phiên ma. Nếu sau khi lọc không còn phiên hợp lệ nào thì coi
-      // như chưa từng gộp, giữ nguyên chế độ phiên đơn lẻ.
-      const savedMerge = await cacheGet<{ source: 'session' | 'merged'; mergedSessionIds: string[] }>(
-        MERGE_STATE_KEY(user.uid)
-      );
+      // bỏ những id phiên không còn tồn tại nữa (đã bị xoá).
       if (savedMerge?.source === 'merged') {
         const validIds = savedMerge.mergedSessionIds.filter((id) => sess.some((s) => s.id === id));
         if (validIds.length) {
@@ -224,13 +255,19 @@ export function DataStoreProvider({ children }: { children: React.ReactNode }) {
       const allWords: (VocabWord & { _sessId: string })[] = [];
       const allMastered = new Set<string>();
       const allFlagged = new Set<string>();
-      for (const sid of sessIds) {
-        // eslint-disable-next-line no-await-in-loop
-        const [v, m, f] = await Promise.all([
-          dbGetSessionVocab(user.uid, sid),
-          dbGetMastered(user.uid, sid),
-          dbGetFlagged(user.uid, sid),
-        ]);
+      // Song song giữa các phiên (trước đây `for ... await` tuần tự: gộp N
+      // phiên = chờ N vòng mạng nối tiếp).
+      const results = await Promise.all(
+        sessIds.map(async (sid) => {
+          const [v, m, f] = await Promise.all([
+            dbGetSessionVocab(user.uid, sid),
+            dbGetMastered(user.uid, sid),
+            dbGetFlagged(user.uid, sid),
+          ]);
+          return { sid, v, m, f };
+        })
+      );
+      for (const { sid, v, m, f } of results) {
         v.forEach((w) => allWords.push({ ...w, _sessId: sid }));
         m.forEach((id) => allMastered.add(id));
         f.forEach((id) => allFlagged.add(id));
@@ -256,7 +293,7 @@ export function DataStoreProvider({ children }: { children: React.ReactNode }) {
     setMasteredIds(m);
     setFlaggedIds(f);
     switchRealtimeSession(uid, sid, onRemoteUpdate);
-    await cacheSet(CURRENT_SESSION_KEY(uid), sid);
+    cacheSet(CURRENT_SESSION_KEY(uid), sid); // không cần chờ ghi xong
   }
 
   // ---- switchSession() ----
@@ -502,7 +539,10 @@ export function DataStoreProvider({ children }: { children: React.ReactNode }) {
     [user, currentSessionId, deleteWord, refreshMergedVocab]
   );
 
-  const value: DataStoreValue = {
+  // useMemo: chỉ tạo object mới khi dữ liệu thật sự đổi — trước đây mỗi lần
+  // DataStoreProvider render là mọi component dùng useDataStore() (MainScreen,
+  // Sidebar, Settings, ListenMode...) đều render lại dù không có gì đổi.
+  const value: DataStoreValue = useMemo(() => ({
     isLoading,
     sessions,
     folders,
@@ -538,7 +578,15 @@ export function DataStoreProvider({ children }: { children: React.ReactNode }) {
     refreshVocab,
     toggleMastered,
     toggleFlagged,
-  };
+  }), [
+    isLoading, sessions, folders, currentSessionId, vocab, masteredIds, flaggedIds,
+    source, mergedSessionIds, mergedVocab, mergedMasteredIds, mergedFlaggedIds,
+    refreshMergedVocab, toggleMasteredForSession, toggleFlaggedForSession,
+    updateWordForSession, deleteWordForSession, switchSession, createSession,
+    deleteSession, renameSession, moveSessionToFolder, createFolderAction,
+    renameFolderAction, deleteFolderAction, moveFolderAction, refreshFolders,
+    addWord, updateWord, deleteWord, refreshVocab, toggleMastered, toggleFlagged,
+  ]);
 
   return <DataStoreContext.Provider value={value}>{children}</DataStoreContext.Provider>;
 }

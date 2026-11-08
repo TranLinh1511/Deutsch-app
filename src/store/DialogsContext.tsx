@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet } from 'react-native';
 import { useTheme } from '@/theme/ThemeContext';
 import BottomSheetModal from '@/components/BottomSheetModal';
@@ -44,6 +44,8 @@ export function DialogsProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const ctxValue = useMemo(() => ({ customConfirm, customPrompt }), [customConfirm, customPrompt]);
+
   const closeConfirm = (result: boolean) => {
     pendingConfirm?.resolve(result);
     setPendingConfirm(null);
@@ -54,7 +56,7 @@ export function DialogsProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <DialogsContext.Provider value={{ customConfirm, customPrompt }}>
+    <DialogsContext.Provider value={ctxValue}>
       {children}
 
       <BottomSheetModal visible={!!pendingConfirm} onClose={() => closeConfirm(false)}>

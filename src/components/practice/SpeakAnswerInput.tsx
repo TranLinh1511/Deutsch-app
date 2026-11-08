@@ -5,11 +5,12 @@ import { mobile, fonts } from '@/theme/theme';
 import Icon from '@/components/Icon';
 import { useSpeechRecognizer, type SpeechLang } from '@/hooks/useSpeechRecognizer';
 import { useToast } from '@/store/ToastContext';
+import { useAnswerValue, type AnswerStore } from '@/hooks/answerStore';
 
 interface SpeakAnswerInputProps {
   /** Chữ nhận diện được từ lần nói gần nhất — hiển thị lại để người dùng
    * biết máy đã nghe được gì (không phải ô nhập, chỉ để xem). */
-  value: string;
+  store: AnswerStore;
   status: 'idle' | 'correct' | 'wrong';
   /** Gọi khi nhận diện xong 1 lượt nói — engine tự so khớp đúng/sai. */
   onResult: (transcript: string) => void;
@@ -32,9 +33,10 @@ const STATUS_TO_NUM = { idle: 0, correct: 1, wrong: 2 } as const;
  * isSentenceMatch) — chỉ xác nhận "nói đúng từ chưa", KHÔNG chấm điểm phát
  * âm chi tiết theo từng âm.
  */
-export default function SpeakAnswerInput({ value, status, onResult, lang, placeholder, questionKey }: SpeakAnswerInputProps) {
+export default function SpeakAnswerInput({ store, status, onResult, lang, placeholder, questionKey }: SpeakAnswerInputProps) {
   const { colors } = useTheme();
   const { showToast } = useToast();
+  const value = useAnswerValue(store);
   const anim = React.useRef(new Animated.Value(STATUS_TO_NUM.idle)).current;
 
   const { status: recStatus, start, stop } = useSpeechRecognizer({

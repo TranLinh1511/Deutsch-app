@@ -2,6 +2,7 @@ import { getDocs, setDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
 import { vocabCol, vocabDoc } from './paths';
 import { cacheGet, cacheSet, cacheRemove } from '@/services/cache';
 import type { VocabWord } from '@/types/models';
+import { emitRevalidated } from './revalidate';
 
 // In-memory cache, mirrors _cache.vocab (sid -> array). Kept fresh by the
 // realtime onSnapshot listener in realtimeSync.ts once a session is active.
@@ -20,21 +21,34 @@ export async function invalidateVocabCache(sid: string): Promise<void> {
   delete _vocabCache[sid];
 }
 
-/** index.html: dbGetSessionVocab(sid) */
+/**
+ * index.html: dbGetSessionVocab(sid)
+ *
+ * Stale-while-revalidate: có cache (RAM hoặc AsyncStorage) → trả về NGAY để
+ * UI hiện tức thì, rồi tải bản mới từ Firestore ở nền; nếu khác bản cache thì
+ * báo qua emitRevalidated để DataStore cập nhật. Chỉ khi chưa có cache nào
+ * (lần đầu cài app / đăng nhập máy mới) mới phải chờ mạng.
+ */
 export async function dbGetSessionVocab(uid: string, sid: string): Promise<VocabWord[]> {
   if (_vocabCache[sid]) return _vocabCache[sid];
+
+  const fetchFresh = async (): Promise<VocabWord[]> => {
+    const snap = await getDocs(query(vocabCol(uid, sid), orderBy('sortOrder', 'asc')));
+    const result = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as VocabWord);
+    const before = _vocabCache[sid];
+    _vocabCache[sid] = result;
+    await cacheSet(`vocab_${sid}`, result);
+    if (before && JSON.stringify(before) !== JSON.stringify(result)) emitRevalidated('vocab', sid);
+    return result;
+  };
 
   const cached = await cacheGet<VocabWord[]>(`vocab_${sid}`);
   if (cached) {
     _vocabCache[sid] = cached;
+    fetchFresh().catch(() => {});
     return cached;
   }
-
-  const snap = await getDocs(query(vocabCol(uid, sid), orderBy('sortOrder', 'asc')));
-  const result = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as VocabWord);
-  _vocabCache[sid] = result;
-  await cacheSet(`vocab_${sid}`, result);
-  return result;
+  return fetchFresh();
 }
 
 /** index.html: dbAddWord(sid, word, order) */
