@@ -1,6 +1,6 @@
 import 'react-native-gesture-handler';
 import React, { useCallback, useEffect, useState } from 'react';
-import { Text, TextInput, AppState } from 'react-native';
+import { Text, TextInput } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
@@ -16,7 +16,7 @@ import { ListenModeProvider } from '@/store/ListenModeContext';
 import ListenModeModal from '@/components/ListenModeModal';
 import FloatingListenPlayer from '@/components/FloatingListenPlayer';
 import RootNavigator from '@/navigation/RootNavigator';
-import { warmUpAudioSession, primeGermanVoice } from '@/services/tts';
+import { warmUpAudioSession } from '@/services/tts';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -67,22 +67,6 @@ export default function App() {
   // chú thích chi tiết trong warmUpAudioSession() (services/tts.ts).
   useEffect(() => {
     warmUpAudioSession();
-  }, []);
-
-  // SỬA LỖI "phát âm tiếng Đức chậm ~5 giây" TRÊN iOS: warm-up ở trên chỉ
-  // chạy MỘT LẦN lúc app khởi động. Nếu người dùng đưa app xuống nền một
-  // lúc (khoá màn hình, chuyển app khác) rồi quay lại, iOS có thể đã giải
-  // phóng khỏi bộ nhớ dữ liệu quy tắc phát âm tiếng Đức vừa nạp — khiến
-  // lệnh đọc tiếng Đức TIẾP THEO sau khi quay lại bị chậm lại y như lần
-  // đầu. Lắng nghe AppState và "nạp nóng" lại (âm lượng gần như câm) mỗi
-  // khi app chuyển sang 'active' để ẩn độ trễ đó, thay vì để nó rơi đúng
-  // lúc người dùng bấm nghe. Xem giải thích đầy đủ trong
-  // primeGermanVoice()/warmUpAudioSession() (services/tts.ts).
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') primeGermanVoice();
-    });
-    return () => sub.remove();
   }, []);
 
   if (!fontsLoaded && !fontError) return null;

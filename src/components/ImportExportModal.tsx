@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { useTheme } from '@/theme/ThemeContext';
@@ -97,7 +97,7 @@ export default function ImportExportModal({ visible, onClose }: ImportExportModa
       } else {
         const sessName = sessions.find((s) => s.id === currentSessionId)?.name || 'session';
         await exportWordsToExcel(vocab, `${sessName}.xlsx`);
-        showToast('Đã xuất Excel', 'check-circle');
+        showToast(Platform.OS === 'ios' ? 'Đã lưu Excel vào Tệp > bei TL' : 'Đã xuất Excel', 'check-circle');
       }
     } catch {
       showToast('Lỗi xuất Excel', 'times-circle');

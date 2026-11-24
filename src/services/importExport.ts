@@ -69,7 +69,30 @@ export async function resetExportDirectory() {
  * Android không lấy được quyền thư mục: quay lại cách cũ — ghi vào cache
  * app rồi đưa cho OS share sheet qua expo-sharing.
  */
-async function saveAndShareFile(content: string, filename: string, mimeType: string, base64 = false) {
+/**
+ * iOS: true = mở share sheet (UIActivityViewController) sau khi lưu file.
+ * Để false: app TrollStore ký giả với entitlements "no-sandbox" và share
+ * sheet được mở ngay khi bottom-sheet còn đang đóng là nguyên nhân khiến app
+ * bị thoát tức thì khi xuất file. Mặc định chỉ lưu file vào thư mục tài
+ * liệu của app (hiện trong ứng dụng Tệp > Trên iPhone > bei TL nhờ
+ * UIFileSharingEnabled trong app.json) — không phụ thuộc share sheet.
+ */
+const IOS_USE_SHARE_SHEET = false;
+
+/** Tên file an toàn: bỏ / \ : * ? " < > | và ký tự điều khiển (tên phiên do người dùng đặt có thể chứa chúng). */
+function safeFilename(name: string): string {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '');
+  return cleaned || 'export';
+}
+
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+async function saveAndShareFile(content: string, rawFilename: string, mimeType: string, base64 = false) {
+  const filename = safeFilename(rawFilename);
   const encoding = base64 ? FileSystem.EncodingType.Base64 : FileSystem.EncodingType.UTF8;
 
   if (Platform.OS === 'android') {
@@ -88,6 +111,18 @@ async function saveAndShareFile(content: string, filename: string, mimeType: str
       // — xoá để lần xuất sau hỏi lại, rơi xuống cách cũ cho lần xuất này.
       await AsyncStorage.removeItem(EXPORT_DIR_KEY).catch(() => {});
     }
+  }
+
+  if (Platform.OS === 'ios') {
+    // Ghi vào documentDirectory (hiện trong app Tệp) thay vì cache.
+    const dir = FileSystem.documentDirectory ?? FileSystem.cacheDirectory;
+    const uri = dir + filename;
+    await FileSystem.writeAsStringAsync(uri, content, { encoding });
+    if (IOS_USE_SHARE_SHEET && (await Sharing.isAvailableAsync())) {
+      await wait(600); // chờ bottom-sheet đóng hẳn rồi mới present share sheet
+      await Sharing.shareAsync(uri, { mimeType, dialogTitle: filename, UTI: mimeType });
+    }
+    return uri;
   }
 
   const uri = FileSystem.cacheDirectory + filename;

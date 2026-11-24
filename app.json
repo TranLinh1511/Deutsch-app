@@ -11,7 +11,9 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.deutschbeitl.app",
       "infoPlist": {
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": ["audio"],
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
       }
     },
     "android": {

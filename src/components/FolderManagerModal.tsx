@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, ScrollView, Dimensions } from 'react-native';
+import { View, Text, Pressable, StyleSheet, ScrollView, Dimensions, Platform } from 'react-native';
 import { useTheme } from '@/theme/ThemeContext';
 import type { ThemeColors } from '@/theme/theme';
 import { useDataStore } from '@/store/DataStore';
@@ -13,6 +13,10 @@ import type { Folder, Session } from '@/types/models';
 import type { PracticeEngine } from '@/hooks/usePracticeEngine';
 import { exportSessionsToJsonFile, exportWordsToExcel, exportSessionsToExcel } from '@/services/importExport';
 import { dbGetSessionVocab } from '@/services/firebase/words';
+
+// Chờ bottom-sheet menu đóng xong hẳn (animation ~300ms) rồi mới chạy việc nặng/native như xuất file —
+// làm ngay khi menu còn đang đóng dễ khiến iOS thoát app.
+const afterMenuClosed = () => new Promise<void>((r) => setTimeout(r, 450));
 
 /**
  * Checklist C: quản lý thư mục — tạo/đổi tên/xoá thư mục (kể cả thư mục
@@ -201,9 +205,10 @@ export default function FolderManagerModal({ visible, onClose, engine }: FolderM
   async function handleExportSessionJson(sid: string, name: string) {
     if (!user) return;
     setAssigningSessionId(null);
+    await afterMenuClosed();
     try {
       await exportSessionsToJsonFile(user.uid, [sid], `${name}.json`);
-      showToast('Đã xuất JSON', 'check-circle');
+      showToast(Platform.OS === 'ios' ? 'Đã lưu JSON vào Tệp > bei TL' : 'Đã xuất JSON', 'check-circle');
     } catch {
       showToast('Lỗi xuất JSON', 'times-circle');
     }
@@ -212,10 +217,11 @@ export default function FolderManagerModal({ visible, onClose, engine }: FolderM
   async function handleExportSessionExcel(sid: string, name: string) {
     if (!user) return;
     setAssigningSessionId(null);
+    await afterMenuClosed();
     try {
       const words = await dbGetSessionVocab(user.uid, sid);
       await exportWordsToExcel(words, `${name}.xlsx`);
-      showToast('Đã xuất Excel', 'check-circle');
+      showToast(Platform.OS === 'ios' ? 'Đã lưu Excel vào Tệp > bei TL' : 'Đã xuất Excel', 'check-circle');
     } catch {
       showToast('Lỗi xuất Excel', 'times-circle');
     }
@@ -230,6 +236,7 @@ export default function FolderManagerModal({ visible, onClose, engine }: FolderM
       showToast('Thư mục không có phiên nào để xuất', 'info-circle');
       return;
     }
+    await afterMenuClosed();
     try {
       const sessionsData = await Promise.all(
         allSessions.map(async (s) => ({ name: s.name, words: await dbGetSessionVocab(user.uid, s.id) }))
@@ -250,6 +257,7 @@ export default function FolderManagerModal({ visible, onClose, engine }: FolderM
     if (!user) return;
     const ids = engine.mergedSessionIds;
     if (!ids.length) return;
+    await afterMenuClosed();
     try {
       await exportSessionsToJsonFile(user.uid, ids, `Gop_phien_${ids.length}.json`);
       showToast(`Đã xuất ${ids.length} phiên`, 'check-circle');
@@ -262,6 +270,7 @@ export default function FolderManagerModal({ visible, onClose, engine }: FolderM
     if (!user) return;
     const ids = engine.mergedSessionIds;
     if (!ids.length) return;
+    await afterMenuClosed();
     try {
       const sessionsData = await Promise.all(
         ids.map(async (sid) => ({
@@ -513,7 +522,7 @@ function FolderNode({
       <Pressable style={styles.folderHeader} onPress={() => onToggleExpand(node.folder.id, siblingIds)}>
         <View style={styles.folderHeaderLeft}>
           <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={11} color={colors.tx3} style={styles.chevron} />
-          <Text style={[styles.folderName, { color: colors.tx }]} numberOfLines={1}>
+          <Text style={[styles.folderName, { color: colors.tx }]}>
             <Icon name="folder" size={12} color={colors.tx} />{'  '}{node.folder.name}
           </Text>
         </View>
@@ -523,7 +532,7 @@ function FolderNode({
       </Pressable>
 
       <BottomSheetModal visible={actionsOpen} onClose={() => setActionsOpen(false)}>
-        <Text style={[styles.moveModalTitle, { color: colors.tx }]} numberOfLines={1}>
+        <Text style={[styles.moveModalTitle, { color: colors.tx }]}>
           <Icon name="folder" size={13} color={colors.tx} />{'  '}{node.folder.name}
         </Text>
         <MenuItem icon="plus" label="Thêm thư mục con" onPress={() => { setActionsOpen(false); onCreateSubfolder(node.folder.id); }} color={colors.tx} />
@@ -553,7 +562,7 @@ function FolderNode({
       </BottomSheetModal>
 
       <BottomSheetModal visible={moveModalOpen} onClose={() => setMoveModalOpen(false)}>
-        <Text style={[styles.moveModalTitle, { color: colors.tx }]} numberOfLines={1}>
+        <Text style={[styles.moveModalTitle, { color: colors.tx }]}>
           Chuyển "{node.folder.name}" đến thư mục
         </Text>
         <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled">
@@ -730,8 +739,7 @@ function SessionAssignCard({
           </View>
         )}
         <Text
-          style={{ color: textColor, fontSize: 13, fontWeight: isActive || isMergeChecked ? '700' : '600', flex: 1 }}
-          numberOfLines={1}
+          style={{ color: textColor, fontSize: 13, fontWeight: isActive || isMergeChecked ? '700' : '600', flex: 1, flexShrink: 1 }}
         >
           {!mergeMode && isActive ? <Icon name="play" size={9} color={textColor} /> : null}{!mergeMode && isActive ? ' ' : ''}
           {name}
@@ -745,7 +753,7 @@ function SessionAssignCard({
       </Pressable>
 
       <BottomSheetModal visible={actionsOpen} onClose={() => setActionsOpen(false)}>
-        <Text style={[styles.moveModalTitle, { color: colors.tx }]} numberOfLines={1}>
+        <Text style={[styles.moveModalTitle, { color: colors.tx }]}>
           {mergeMode ? `${mergedCount} phiên đang gộp` : name}
         </Text>
         {!mergeMode && (
@@ -786,7 +794,7 @@ function SessionAssignCard({
       </BottomSheetModal>
 
       <BottomSheetModal visible={moveModalOpen} onClose={() => setMoveModalOpen(false)}>
-        <Text style={[styles.moveModalTitle, { color: colors.tx }]} numberOfLines={1}>
+        <Text style={[styles.moveModalTitle, { color: colors.tx }]}>
           {mergeMode ? `Chuyển ${mergedCount} phiên đến thư mục` : `Chuyển "${name}" đến thư mục`}
         </Text>
         <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled">
@@ -857,11 +865,12 @@ const styles = StyleSheet.create({
   chevron: { fontSize: 12, width: 12 },
   folderName: { fontSize: 14, fontWeight: '600', flexShrink: 1 },
   sessionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingLeft: 14, borderLeftWidth: 1.5, marginTop: 6 },
-  sessionCardWrap: { width: '31%', position: 'relative' },
+  sessionCardWrap: { width: '48%', position: 'relative' },
   sessionCardWrapRaised: { zIndex: 50, elevation: 50 },
   sessionCard: {
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 34,
     borderWidth: 1.5,
     borderRadius: 7,
     paddingVertical: 6,

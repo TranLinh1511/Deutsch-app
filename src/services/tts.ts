@@ -1,4 +1,5 @@
 import * as Speech from 'expo-speech';
+import { Platform } from 'react-native';
 import TrackPlayer, {
   Capability,
   AppKilledPlaybackBehavior,
@@ -209,6 +210,7 @@ export function setTtsSoundEnabled(enabled: boolean) {
  * độ trễ mạng — không ảnh hưởng gì trên máy vốn chỉ có giọng on-device
  * (kết quả dò ra vẫn là giọng duy nhất sẵn có, hành vi y như cũ).
  */
+const PREFER_FAST_VOICE = true;
 let germanVoiceId: string | null | undefined; // undefined = chưa dò, null = không có giọng local nào phù hợp
 
 async function resolveLocalGermanVoice(): Promise<string | null> {
@@ -217,7 +219,17 @@ async function resolveLocalGermanVoice(): Promise<string | null> {
     const voices = await Speech.getAvailableVoicesAsync();
     const deVoices = voices.filter((v) => v.language?.toLowerCase().startsWith('de'));
     const onDevice = deVoices.filter((v) => !v.identifier?.toLowerCase().includes('network'));
-    const best = onDevice.find((v) => v.quality === 'Enhanced') || onDevice[0] || deVoices[0] || null;
+    // iOS: giọng "Enhanced/Premium" là file dữ liệu lớn, nạp lên bộ nhớ mất
+    // thêm ~0.5-1s ở lần đọc đầu và mỗi khi iOS giải phóng nó → ưu tiên giọng
+    // "Default" (nhẹ, bắt đầu đọc gần như tức thì) khi PREFER_FAST_VOICE bật.
+    // Đổi PREFER_FAST_VOICE = false nếu muốn giọng chất lượng cao hơn đổi lấy độ trễ.
+    const best =
+      (Platform.OS === 'ios' && PREFER_FAST_VOICE
+        ? onDevice.find((v) => v.quality !== 'Enhanced')
+        : onDevice.find((v) => v.quality === 'Enhanced')) ||
+      onDevice[0] ||
+      deVoices[0] ||
+      null;
     germanVoiceId = best?.identifier ?? null;
   } catch {
     // Máy/nền tảng không hỗ trợ liệt kê giọng (vd. một số bản Android cũ) —
@@ -253,9 +265,9 @@ function withGermanVoice(options: Speech.SpeechOptions): Speech.SpeechOptions {
  * liệu đó vào một thời điểm người dùng KHÔNG chờ đợi, thay vì để nó rơi
  * đúng lúc người dùng bấm nghe. `primeGermanVoice()` bên dưới làm việc đó
  * bằng cách đọc thử một câu tiếng Đức ngắn ở âm lượng gần như câm — được
- * gọi: (1) một lần khi app vừa mở (trong warmUpAudioSession), và (2) mỗi
- * khi app quay lại foreground sau khi bị đưa xuống nền (App.tsx, qua
- * AppState) — vì iOS có thể giải phóng dữ liệu đã nạp này khỏi bộ nhớ khi
+ * gọi MỘT LẦN khi app vừa mở (trong warmUpAudioSession). Đã BỎ lượt gọi
+ * mỗi khi app quay lại foreground (App.tsx) theo yêu cầu — trước đây nó
+ * phát tiếng mỗi lần mở lại app. (Lý do ban đầu: iOS có thể giải phóng dữ liệu đã nạp này khỏi bộ nhớ khi
  * app ở nền một lúc (đặc biệt trên các máy đời cũ chạy iOS 16 với RAM hạn
  * chế), khiến độ trễ quay lại ở lần đọc tiếng Đức tiếp theo.
  *
@@ -325,10 +337,46 @@ export function primeGermanVoice() {
  * lại (phổ biến hơn nhiều) bỏ qua hẳn `stop()`, để AVSpeechSynthesizer giữ
  * nguyên phiên đã "nóng sẵn" từ lần đọc trước, tránh khởi tạo lại từ đầu.
  */
-export async function speakText(text: string) {
+/**
+ * Theo dõi "đang đọc" ĐỒNG BỘ bằng callback thay vì `await Speech.isSpeakingAsync()`
+ * (mỗi lần gọi là 1 vòng qua bridge native → thêm độ trễ trước MỖI lần đọc,
+ * và Speech.speak chỉ được gọi sau khi vòng đó trả lời xong).
+ */
+let activeUtterances = 0;
+function trackedOptions(options: Speech.SpeechOptions): Speech.SpeechOptions {
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    activeUtterances = Math.max(0, activeUtterances - 1);
+  };
+  activeUtterances++;
+  return {
+    ...options,
+    onDone: () => {
+      finish();
+      options.onDone?.();
+    },
+    onStopped: () => {
+      finish();
+      options.onStopped?.();
+    },
+    onError: (e) => {
+      finish();
+      options.onError?.(e);
+    },
+  };
+}
+
+function speakNow(text: string, options: Speech.SpeechOptions) {
+  // Chỉ stop() khi THỰC SỰ có câu đang đọc dở (xem chú thích bên trên).
+  if (activeUtterances > 0) Speech.stop();
+  Speech.speak(text, trackedOptions(options));
+}
+
+export function speakText(text: string) {
   if (!soundEnabledRef || !text?.trim()) return;
-  if (await Speech.isSpeakingAsync()) Speech.stop();
-  Speech.speak(
+  speakNow(
     text.trim(),
     withGermanVoice({
       language: 'de-DE',
@@ -362,10 +410,9 @@ export function speakForMode(q: Question, effectiveType: Exclude<ExerciseType, '
 }
 
 /** Same as speakText but for Vietnamese (nghĩa) — used by "nghe - nguyên từ" mode. */
-export async function speakTextVi(text: string) {
+export function speakTextVi(text: string) {
   if (!soundEnabledRef || !text?.trim()) return;
-  if (await Speech.isSpeakingAsync()) Speech.stop();
-  Speech.speak(text.trim(), {
+  speakNow(text.trim(), {
     language: 'vi-VN',
     rate: 0.85,
     pitch: 1,
