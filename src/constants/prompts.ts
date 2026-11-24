@@ -101,3 +101,51 @@ kaputt	adj	hỏng, bị vỡ	Das Gerät ist kaputt. (Thiết bị bị hỏng.)
 - KHÔNG để trống cột câu ví dụ — bắt buộc có ví dụ cho mọi từ
 - TUYỆT ĐỐI không thêm văn bản ngoài dữ liệu, không thêm cột, không dùng markdown, không dùng JSON
 - Nếu không chắc về một từ → vẫn đưa vào, đừng tự loại bỏ`;
+
+
+/**
+ * Prompt "Tạo đoạn văn từ từ vựng trong bài" — người dùng chọn trình độ
+ * (CEFR) rồi sao chép prompt kèm danh sách từ của bài đang mở (hoặc các bài
+ * đang gộp), dán cho một trợ lý AI (ChatGPT, Gemini, Claude...) để nhận về
+ * một đoạn văn tiếng Đức dùng đúng các từ đó. App KHÔNG tự gọi AI.
+ */
+export type CefrLevel = 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
+export const CEFR_LEVELS: CefrLevel[] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+
+const LEVEL_GUIDE: Record<CefrLevel, string> = {
+  A1: 'câu rất ngắn và đơn giản, chủ yếu thì hiện tại, từ nối cơ bản (und, aber, weil), không dùng cấu trúc phức tạp',
+  A2: 'câu ngắn–vừa, thì hiện tại và Perfekt, từ nối đơn giản (weil, dass, denn), chủ đề đời sống hằng ngày',
+  B1: 'câu vừa, có mệnh đề phụ (weil, dass, wenn, obwohl), Perfekt/Präteritum, Konjunktiv II đơn giản, văn phong tự nhiên',
+  B2: 'câu phức, nhiều loại mệnh đề phụ, Passiv, Konjunktiv, từ nối đa dạng (jedoch, trotzdem, deshalb), văn phong mạch lạc',
+  C1: 'câu phức tạp và tinh tế, cấu trúc danh từ hoá, Konjunktiv I/II, thành ngữ, văn phong trang trọng hoặc học thuật',
+  C2: 'văn phong như người bản ngữ có học thức: sắc thái tinh tế, cấu trúc câu đa dạng và phức tạp, thành ngữ, ẩn dụ',
+};
+
+export function buildParagraphPrompt(
+  level: CefrLevel,
+  words: { originalGerman: string; meaning: string; wordType?: string }[]
+): string {
+  const list = words
+    .map((w, i) => {
+      const type = w.wordType ? ` [${w.wordType}]` : '';
+      return `${i + 1}. ${w.originalGerman}${type} — ${w.meaning}`;
+    })
+    .join('\n');
+
+  return `Bạn là giáo viên tiếng Đức. Hãy viết cho tôi MỘT đoạn văn tiếng Đức trình độ ${level} (CEFR) sử dụng các từ vựng trong danh sách bên dưới.
+
+Yêu cầu:
+1. Trình độ ${level}: ${LEVEL_GUIDE[level]}.
+2. Cố gắng dùng TẤT CẢ ${words.length} từ trong danh sách, mỗi từ ít nhất một lần; được chia động từ, đổi dạng số nhiều/cách (Kasus) cho phù hợp ngữ pháp. Từ nào thật sự không thể dùng tự nhiên thì bỏ qua và liệt kê ở cuối.
+3. Đoạn văn phải mạch lạc, có chủ đề rõ ràng, tự nhiên như người bản ngữ viết — không chỉ ghép từ rời rạc. Độ dài vừa phải theo số từ (nếu danh sách quá dài, chia thành nhiều đoạn ngắn có đánh số).
+4. In ĐẬM (**từ**) mọi từ vựng trong danh sách khi xuất hiện trong đoạn văn.
+5. Không dùng từ/ngữ pháp vượt quá trình độ ${level} ngoài các từ vựng đã cho.
+
+Định dạng trả lời:
+- Phần 1: Đoạn văn tiếng Đức.
+- Phần 2: Bản dịch tiếng Việt.
+- Phần 3: Danh sách từ chưa dùng được (nếu có).
+
+Danh sách từ vựng (Từ [loại từ] — nghĩa):
+${list}`;
+}

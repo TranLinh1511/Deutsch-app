@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Pressable, TextInput, StyleSheet, ScrollView, Platform } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@/theme/ThemeContext';
@@ -11,6 +11,7 @@ import { IMAGE_VOCAB_EXTRACTION_PROMPT } from '@/constants/prompts';
 import BottomSheetModal from './BottomSheetModal';
 import NotificationSettingsPopup from './NotificationSettingsPopup';
 import BreakSettingsPopup from './BreakSettingsPopup';
+import ParagraphPromptPopup from './ParagraphPromptPopup';
 import Icon from './Icon';
 import type { PracticeEngine } from '@/hooks/usePracticeEngine';
 
@@ -71,9 +72,19 @@ export default function SettingsModal({ visible, onClose, engine }: SettingsModa
     await logout();
   };
 
+  // Settings là một Modal native nên toast của ToastProvider (vẽ ở gốc app)
+  // nằm DƯỚI modal và người dùng không thấy → báo "Đã sao chép" ngay trên nút.
+  const [paragraphPopupVisible, setParagraphPopupVisible] = useState(false);
+  const [copiedImage, setCopiedImage] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current); }, []);
+
   const handleCopyPrompt = async () => {
     await Clipboard.setStringAsync(IMAGE_VOCAB_EXTRACTION_PROMPT);
-    showToast('Đã sao chép prompt vào bộ nhớ tạm');
+    setCopiedImage(true);
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    copiedTimer.current = setTimeout(() => setCopiedImage(false), 2200);
+    showToast('Đã sao chép prompt vào bộ nhớ tạm', 'check-circle');
   };
 
   // Xoá thư mục SAF đã lưu (Download/deutsch...) — lần xuất file tiếp theo
@@ -155,10 +166,17 @@ export default function SettingsModal({ visible, onClose, engine }: SettingsModa
             onPress={handleCopyPrompt}
             style={[styles.copyBtn, { backgroundColor: colors.bg3, borderColor: colors.border }]}
           >
-            <Icon name="copy" size={12} color={colors.tx} />
-            <Text style={{ color: colors.tx, fontSize: 13, fontWeight: '600', marginLeft: 8 }}>Sao chép</Text>
+            <Icon name={copiedImage ? 'check' : 'copy'} size={12} color={copiedImage ? '#3fb950' : colors.tx} />
+            <Text style={{ color: copiedImage ? '#3fb950' : colors.tx, fontSize: 13, fontWeight: '600', marginLeft: 8 }}>
+              {copiedImage ? 'Đã sao chép' : 'Sao chép'}
+            </Text>
           </Pressable>
         </View>
+
+        <Pressable style={styles.row} onPress={() => setParagraphPopupVisible(true)}>
+          <Text style={{ color: colors.tx, fontSize: 13.5, flex: 1 }}>Prompt tạo đoạn văn từ từ vựng trong bài</Text>
+          <Icon name="chevron-right" size={12} color={colors.tx3} />
+        </Pressable>
 
         {Platform.OS === 'android' && (
           <View style={styles.row}>
@@ -205,6 +223,7 @@ export default function SettingsModal({ visible, onClose, engine }: SettingsModa
       </ScrollView>
       <NotificationSettingsPopup visible={notifPopupVisible} onClose={() => setNotifPopupVisible(false)} />
       <BreakSettingsPopup visible={breakPopupVisible} onClose={() => setBreakPopupVisible(false)} />
+      <ParagraphPromptPopup visible={paragraphPopupVisible} onClose={() => setParagraphPopupVisible(false)} />
     </BottomSheetModal>
   );
 }
